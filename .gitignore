@@ -1,0 +1,8 @@
+.venv/
+.tmp/
+__pycache__/
+*.pyc
+.shotrack_settings.json
+build/
+dist/
+*.spec
