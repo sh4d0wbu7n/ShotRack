@@ -20,11 +20,11 @@ if (-not (Test-Path ".\.venv\Scripts\python.exe")) {
     --collect-all shiboken6 `
     .\shotrack_launcher.py
 
-$versioned = Join-Path $root "dist\ShotRack-0.0.3"
+$versioned = Join-Path $root "dist\ShotRack-0.0.4"
 if (Test-Path $versioned) {
     Remove-Item -LiteralPath $versioned -Recurse -Force
 }
-Rename-Item -LiteralPath (Join-Path $root "dist\ShotRack") -NewName "ShotRack-0.0.3"
+Rename-Item -LiteralPath (Join-Path $root "dist\ShotRack") -NewName "ShotRack-0.0.4"
 
 Write-Host "Portable build complete:"
 Write-Host $versioned

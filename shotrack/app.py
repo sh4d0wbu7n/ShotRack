@@ -119,24 +119,27 @@ class MainWindow(QMainWindow):
         self._building_ui = False
 
         self.tree = QTreeWidget()
+        self.tree.setObjectName("sceneTree")
         self.tree.setHeaderHidden(True)
+        self.tree.setIndentation(18)
         self.tree.itemSelectionChanged.connect(self.on_tree_selection)
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self.show_tree_context_menu)
 
         self.take_list = TakeList(self)
+        self.take_list.setObjectName("takeGrid")
         self.take_list.itemSelectionChanged.connect(self.on_take_selection)
         self.take_list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.take_list.customContextMenuRequested.connect(self.show_take_context_menu)
 
         self.preview_label = QLabel("Open or create a project.")
+        self.preview_label.setObjectName("previewSurface")
         self.preview_label.setAlignment(Qt.AlignCenter)
-        self.preview_label.setMinimumHeight(210)
-        self.preview_label.setStyleSheet("background:#20242b;color:#e9ecef;border:1px solid #444b55;")
+        self.preview_label.setMinimumHeight(240)
 
         self.video_widget = QVideoWidget()
-        self.video_widget.setMinimumHeight(210)
-        self.video_widget.setStyleSheet("background:#111418;")
+        self.video_widget.setObjectName("previewSurface")
+        self.video_widget.setMinimumHeight(240)
 
         self.player = QMediaPlayer(self)
         self.audio_output = QAudioOutput(self)
@@ -151,8 +154,10 @@ class MainWindow(QMainWindow):
         self.preview_stack.addWidget(self.video_widget)
 
         self.play_button = QPushButton("Play")
+        self.play_button.setObjectName("primaryButton")
         self.play_button.clicked.connect(self.toggle_playback)
         self.stop_button = QPushButton("Stop")
+        self.stop_button.setObjectName("secondaryButton")
         self.stop_button.clicked.connect(self.stop_playback)
         self.position_slider = QSlider(Qt.Horizontal)
         self.position_slider.setRange(0, 0)
@@ -160,6 +165,7 @@ class MainWindow(QMainWindow):
         self.time_label = QLabel("00:00 / 00:00")
 
         self.title_label = QLabel("No take selected")
+        self.title_label.setObjectName("assetTitle")
         self.title_label.setWordWrap(True)
 
         self.stars = QSpinBox()
@@ -175,15 +181,20 @@ class MainWindow(QMainWindow):
         self.comment_edit.setPlaceholderText("Add comment...")
         self.comment_edit.setFixedHeight(82)
         self.add_comment_button = QPushButton("Add Comment")
+        self.add_comment_button.setObjectName("primaryButton")
         self.add_comment_button.clicked.connect(self.add_comment)
 
         self.open_media_button = QPushButton("Open Media")
+        self.open_media_button.setObjectName("secondaryButton")
         self.open_media_button.clicked.connect(self.open_media)
         self.open_sidecar_button = QPushButton("Open PNG/Image")
+        self.open_sidecar_button.setObjectName("secondaryButton")
         self.open_sidecar_button.clicked.connect(self.open_sidecar)
         self.bin_button = QPushButton("Move to Bin")
+        self.bin_button.setObjectName("secondaryButton")
         self.bin_button.clicked.connect(self.bin_current_take)
         self.delete_take_button = QPushButton("Delete Asset")
+        self.delete_take_button.setObjectName("dangerButton")
         self.delete_take_button.clicked.connect(self.delete_current_take)
 
         self.scene_number = QSpinBox()
@@ -196,35 +207,49 @@ class MainWindow(QMainWindow):
         self.shot_description = QLineEdit()
         self.shot_description.setPlaceholderText("human_description")
         self.save_shot_button = QPushButton("Save Scene/Shot")
+        self.save_shot_button.setObjectName("primaryButton")
         self.save_shot_button.clicked.connect(self.save_scene_shot)
         self.delete_scene_button = QPushButton("Delete Scene")
+        self.delete_scene_button.setObjectName("dangerButton")
         self.delete_scene_button.clicked.connect(self.delete_current_scene)
         self.delete_shot_button = QPushButton("Delete Shot")
+        self.delete_shot_button.setObjectName("dangerButton")
         self.delete_shot_button.clicked.connect(self.delete_current_shot)
 
         self.bin_list = QListWidget()
+        self.bin_list.setObjectName("binList")
         self.restore_button = QPushButton("Restore Selected")
+        self.restore_button.setObjectName("primaryButton")
         self.restore_button.clicked.connect(self.restore_selected_take)
 
         self.build_layout()
         self.build_actions()
+        self.apply_theme()
         self.update_enabled_state()
 
     def build_layout(self) -> None:
         splitter = QSplitter()
+        splitter.setObjectName("mainSplitter")
         splitter.addWidget(self.tree)
 
         center = QWidget()
+        center.setObjectName("assetPanel")
         center_layout = QVBoxLayout(center)
-        center_layout.addWidget(QLabel("Takes"))
+        center_layout.setContentsMargins(16, 14, 16, 16)
+        center_layout.setSpacing(12)
+        center_layout.addWidget(self.section_label("Takes"))
         center_layout.addWidget(self.take_list, 1)
         splitter.addWidget(center)
 
         right_tabs = QTabWidget()
+        right_tabs.setObjectName("detailTabs")
         details = QWidget()
         details_layout = QVBoxLayout(details)
+        details_layout.setContentsMargins(16, 16, 16, 16)
+        details_layout.setSpacing(12)
         details_layout.addWidget(self.preview_stack)
         playback_row = QHBoxLayout()
+        playback_row.setSpacing(8)
         playback_row.addWidget(self.play_button)
         playback_row.addWidget(self.stop_button)
         playback_row.addWidget(self.position_slider, 1)
@@ -233,17 +258,22 @@ class MainWindow(QMainWindow):
         details_layout.addWidget(self.title_label)
 
         form = QFormLayout()
+        form.setLabelAlignment(Qt.AlignLeft)
+        form.setFormAlignment(Qt.AlignTop)
+        form.setHorizontalSpacing(14)
+        form.setVerticalSpacing(10)
         form.addRow("Stars", self.stars)
         form.addRow("Status", self.status)
         details_layout.addLayout(form)
 
         button_row = QHBoxLayout()
+        button_row.setSpacing(8)
         button_row.addWidget(self.open_media_button)
         button_row.addWidget(self.open_sidecar_button)
         details_layout.addLayout(button_row)
         details_layout.addWidget(self.bin_button)
         details_layout.addWidget(self.delete_take_button)
-        details_layout.addWidget(QLabel("Comments"))
+        details_layout.addWidget(self.section_label("Comments"))
         details_layout.addWidget(self.comments, 1)
         details_layout.addWidget(self.comment_edit)
         details_layout.addWidget(self.add_comment_button)
@@ -251,6 +281,9 @@ class MainWindow(QMainWindow):
 
         shot_editor = QWidget()
         shot_layout = QFormLayout(shot_editor)
+        shot_layout.setContentsMargins(16, 18, 16, 16)
+        shot_layout.setHorizontalSpacing(14)
+        shot_layout.setVerticalSpacing(12)
         shot_layout.addRow("Scene", self.scene_number)
         shot_layout.addRow("Scene Description", self.scene_description)
         shot_layout.addRow("Shot", self.shot_number)
@@ -262,16 +295,21 @@ class MainWindow(QMainWindow):
 
         bin_tab = QWidget()
         bin_layout = QVBoxLayout(bin_tab)
+        bin_layout.setContentsMargins(16, 16, 16, 16)
+        bin_layout.setSpacing(12)
         bin_layout.addWidget(self.bin_list)
         bin_layout.addWidget(self.restore_button)
         right_tabs.addTab(bin_tab, "Bin")
 
         splitter.addWidget(right_tabs)
-        splitter.setSizes([250, 610, 420])
+        splitter.setSizes([280, 610, 430])
         self.setCentralWidget(splitter)
 
     def build_actions(self) -> None:
         toolbar = QToolBar("Main")
+        toolbar.setObjectName("mainToolbar")
+        toolbar.setMovable(False)
+        toolbar.setIconSize(QSize(18, 18))
         self.addToolBar(toolbar)
 
         new_project = QAction("New Project", self)
@@ -332,6 +370,216 @@ class MainWindow(QMainWindow):
         next_action.setShortcut(QKeySequence(Qt.Key_Right))
         next_action.triggered.connect(lambda: self.select_relative_take(1))
         self.addAction(next_action)
+
+    def section_label(self, text: str) -> QLabel:
+        label = QLabel(text)
+        label.setObjectName("sectionLabel")
+        return label
+
+    def apply_theme(self) -> None:
+        QApplication.instance().setStyleSheet(
+            """
+            QMainWindow {
+                background: #181916;
+                color: #f1f0e8;
+                font-family: "Segoe UI";
+                font-size: 10pt;
+            }
+            QToolBar#mainToolbar {
+                background: #20211d;
+                border: 0;
+                border-bottom: 1px solid #383a32;
+                spacing: 6px;
+                padding: 8px 10px;
+            }
+            QToolButton {
+                background: #2b2d27;
+                color: #f1f0e8;
+                border: 1px solid #41443b;
+                border-radius: 6px;
+                padding: 7px 10px;
+            }
+            QToolButton:hover {
+                background: #36392f;
+                border-color: #6f7f4f;
+            }
+            QSplitter::handle {
+                background: #2c2e28;
+            }
+            QSplitter::handle:horizontal {
+                width: 2px;
+            }
+            QTreeWidget#sceneTree,
+            QListWidget#takeGrid,
+            QListWidget#binList,
+            QListWidget {
+                background: #20211d;
+                color: #f1f0e8;
+                border: 1px solid #383a32;
+                border-radius: 8px;
+                outline: 0;
+                padding: 6px;
+            }
+            QTreeWidget#sceneTree {
+                border-radius: 0;
+                border-left: 0;
+                border-top: 0;
+                border-bottom: 0;
+                padding: 10px 8px;
+            }
+            QTreeWidget::item,
+            QListWidget::item {
+                border-radius: 6px;
+                padding: 7px;
+                margin: 2px;
+            }
+            QListWidget#takeGrid::item {
+                background: #282a24;
+                border: 1px solid #383a32;
+                padding: 8px;
+                margin: 4px;
+            }
+            QTreeWidget::item:selected,
+            QListWidget::item:selected {
+                background: #4d6b3c;
+                color: #ffffff;
+                border: 1px solid #7f9f5f;
+            }
+            QTreeWidget::item:hover,
+            QListWidget::item:hover {
+                background: #32352c;
+            }
+            QWidget#assetPanel {
+                background: #181916;
+            }
+            QLabel#sectionLabel {
+                color: #b8c0a4;
+                font-size: 9pt;
+                font-weight: 700;
+                letter-spacing: 0;
+                text-transform: uppercase;
+            }
+            QLabel#assetTitle {
+                color: #f6f4ea;
+                font-size: 11pt;
+                font-weight: 700;
+                padding: 2px 0 6px 0;
+            }
+            QLabel#previewSurface,
+            QVideoWidget#previewSurface {
+                background: #10110f;
+                color: #c9c7ba;
+                border: 1px solid #45483c;
+                border-radius: 8px;
+            }
+            QTabWidget::pane {
+                background: #20211d;
+                border: 1px solid #383a32;
+                border-right: 0;
+                border-top: 0;
+            }
+            QTabBar::tab {
+                background: #252721;
+                color: #b8c0a4;
+                border: 1px solid #383a32;
+                border-top-left-radius: 6px;
+                border-top-right-radius: 6px;
+                padding: 9px 16px;
+                margin-right: 3px;
+            }
+            QTabBar::tab:selected {
+                background: #303329;
+                color: #ffffff;
+                border-bottom-color: #303329;
+            }
+            QLineEdit,
+            QTextEdit,
+            QComboBox,
+            QSpinBox {
+                background: #141511;
+                color: #f1f0e8;
+                border: 1px solid #45483c;
+                border-radius: 6px;
+                padding: 6px 8px;
+                selection-background-color: #6f8f47;
+            }
+            QTextEdit {
+                min-height: 70px;
+            }
+            QLineEdit:focus,
+            QTextEdit:focus,
+            QComboBox:focus,
+            QSpinBox:focus {
+                border-color: #8fae68;
+            }
+            QPushButton {
+                min-height: 30px;
+                border-radius: 6px;
+                padding: 6px 10px;
+                font-weight: 600;
+            }
+            QPushButton#primaryButton {
+                background: #6f8f47;
+                color: #ffffff;
+                border: 1px solid #8dad60;
+            }
+            QPushButton#primaryButton:hover {
+                background: #7d9d55;
+            }
+            QPushButton#secondaryButton {
+                background: #2b2d27;
+                color: #f1f0e8;
+                border: 1px solid #45483c;
+            }
+            QPushButton#secondaryButton:hover {
+                background: #373a31;
+            }
+            QPushButton#dangerButton {
+                background: #3b2524;
+                color: #ffd8d4;
+                border: 1px solid #79433f;
+            }
+            QPushButton#dangerButton:hover {
+                background: #4b2d2b;
+            }
+            QPushButton:disabled,
+            QToolButton:disabled,
+            QLineEdit:disabled,
+            QTextEdit:disabled,
+            QComboBox:disabled,
+            QSpinBox:disabled {
+                color: #6f7166;
+                background: #20211d;
+                border-color: #303229;
+            }
+            QSlider::groove:horizontal {
+                height: 5px;
+                background: #3a3d34;
+                border-radius: 2px;
+            }
+            QSlider::handle:horizontal {
+                background: #d2a64b;
+                border: 1px solid #f0c76e;
+                width: 14px;
+                margin: -5px 0;
+                border-radius: 7px;
+            }
+            QMenu {
+                background: #24261f;
+                color: #f1f0e8;
+                border: 1px solid #45483c;
+                border-radius: 6px;
+                padding: 5px;
+            }
+            QMenu::item {
+                padding: 7px 22px;
+                border-radius: 4px;
+            }
+            QMenu::item:selected {
+                background: #4d6b3c;
+            }
+            """
+        )
 
     def update_enabled_state(self) -> None:
         has_project = self.db is not None
