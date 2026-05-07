@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMainWindow,
     QMessageBox,
+    QMenu,
     QPushButton,
     QSpinBox,
     QSplitter,
@@ -120,9 +121,13 @@ class MainWindow(QMainWindow):
         self.tree = QTreeWidget()
         self.tree.setHeaderHidden(True)
         self.tree.itemSelectionChanged.connect(self.on_tree_selection)
+        self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.tree.customContextMenuRequested.connect(self.show_tree_context_menu)
 
         self.take_list = TakeList(self)
         self.take_list.itemSelectionChanged.connect(self.on_take_selection)
+        self.take_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.take_list.customContextMenuRequested.connect(self.show_take_context_menu)
 
         self.preview_label = QLabel("Open or create a project.")
         self.preview_label.setAlignment(Qt.AlignCenter)
@@ -496,6 +501,53 @@ class MainWindow(QMainWindow):
         self.current_take_id = item.data(Qt.UserRole) if item else None
         self.refresh_take_detail()
         self.update_enabled_state()
+
+    def show_tree_context_menu(self, position) -> None:  # type: ignore[no-untyped-def]
+        if not self.db:
+            return
+        item = self.tree.itemAt(position)
+        menu = QMenu(self)
+        add_scene = menu.addAction("Add Scene")
+        add_scene.triggered.connect(self.add_scene)
+        if item:
+            self.tree.setCurrentItem(item)
+            kind, _item_id = item.data(0, Qt.UserRole)
+            if kind == "scene":
+                add_shot = menu.addAction("Add Shot")
+                add_shot.triggered.connect(self.add_shot)
+                menu.addSeparator()
+                delete_scene = menu.addAction("Delete Scene")
+                delete_scene.triggered.connect(self.delete_current_scene)
+            elif kind == "shot":
+                import_media = menu.addAction("Import Media")
+                import_media.triggered.connect(self.choose_import_files)
+                menu.addSeparator()
+                delete_shot = menu.addAction("Delete Shot")
+                delete_shot.triggered.connect(self.delete_current_shot)
+        menu.exec(self.tree.viewport().mapToGlobal(position))
+
+    def show_take_context_menu(self, position) -> None:  # type: ignore[no-untyped-def]
+        if not self.db:
+            return
+        item = self.take_list.itemAt(position)
+        if not item:
+            return
+        self.take_list.setCurrentItem(item)
+        take = self.current_take()
+        if not take:
+            return
+        menu = QMenu(self)
+        open_media = menu.addAction("Open Media")
+        open_media.triggered.connect(self.open_media)
+        open_sidecar = menu.addAction("Open PNG/Image")
+        open_sidecar.setEnabled(bool(take.sidecar_path or take.media_type == "image"))
+        open_sidecar.triggered.connect(self.open_sidecar)
+        menu.addSeparator()
+        move_to_bin = menu.addAction("Move to Bin")
+        move_to_bin.triggered.connect(self.bin_current_take)
+        delete_asset = menu.addAction("Delete Asset")
+        delete_asset.triggered.connect(self.delete_current_take)
+        menu.exec(self.take_list.viewport().mapToGlobal(position))
 
     def populate_shot_editor(self) -> None:
         if not self.db or not self.current_shot_id:
