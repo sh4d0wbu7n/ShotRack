@@ -26,6 +26,7 @@ def now_iso() -> str:
 class Scene:
     id: int
     number: int
+    description: str
 
 
 @dataclass(frozen=True)
@@ -69,7 +70,8 @@ class Database:
             """
             CREATE TABLE IF NOT EXISTS scenes (
                 id INTEGER PRIMARY KEY,
-                number INTEGER NOT NULL UNIQUE
+                number INTEGER NOT NULL UNIQUE,
+                description TEXT NOT NULL DEFAULT ''
             );
 
             CREATE TABLE IF NOT EXISTS shots (
@@ -105,7 +107,13 @@ class Database:
             );
             """
         )
+        self.ensure_column("scenes", "description", "TEXT NOT NULL DEFAULT ''")
         self.conn.commit()
+
+    def ensure_column(self, table: str, column: str, definition: str) -> None:
+        rows = self.conn.execute(f"PRAGMA table_info({table})").fetchall()
+        if column not in {row["name"] for row in rows}:
+            self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
     def scenes(self) -> list[Scene]:
         rows = self.conn.execute("SELECT * FROM scenes ORDER BY number").fetchall()
@@ -130,7 +138,7 @@ class Database:
         number = max_number + 1
         cur = self.conn.execute("INSERT INTO scenes(number) VALUES (?)", (number,))
         self.conn.commit()
-        return Scene(cur.lastrowid, number)
+        return Scene(cur.lastrowid, number, "")
 
     def create_shot(self, scene_id: int) -> Shot:
         max_number = self.conn.execute(
@@ -146,6 +154,13 @@ class Database:
 
     def update_scene_number(self, scene_id: int, number: int) -> None:
         self.conn.execute("UPDATE scenes SET number = ? WHERE id = ?", (number, scene_id))
+        self.conn.commit()
+
+    def update_scene(self, scene_id: int, number: int, description: str) -> None:
+        self.conn.execute(
+            "UPDATE scenes SET number = ?, description = ? WHERE id = ?",
+            (number, description, scene_id),
+        )
         self.conn.commit()
 
     def update_shot(self, shot_id: int, number: int, description: str) -> None:
@@ -212,6 +227,20 @@ class Database:
         ).fetchall()
         return [Take(**dict(row)) for row in rows]
 
+    def takes_for_scene(self, scene_id: int, include_binned: bool = False) -> list[Take]:
+        binned_clause = "" if include_binned else "AND takes.is_binned = 0"
+        rows = self.conn.execute(
+            f"""
+            SELECT takes.*
+            FROM takes
+            JOIN shots ON shots.id = takes.shot_id
+            WHERE shots.scene_id = ? {binned_clause}
+            ORDER BY shots.number, takes.take_number
+            """,
+            (scene_id,),
+        ).fetchall()
+        return [Take(**dict(row)) for row in rows]
+
     def take(self, take_id: int) -> Take:
         row = self.conn.execute("SELECT * FROM takes WHERE id = ?", (take_id,)).fetchone()
         return Take(**dict(row))
@@ -240,6 +269,18 @@ class Database:
         )
         self.conn.commit()
 
+    def delete_take(self, take_id: int) -> None:
+        self.conn.execute("DELETE FROM takes WHERE id = ?", (take_id,))
+        self.conn.commit()
+
+    def delete_shot(self, shot_id: int) -> None:
+        self.conn.execute("DELETE FROM shots WHERE id = ?", (shot_id,))
+        self.conn.commit()
+
+    def delete_scene(self, scene_id: int) -> None:
+        self.conn.execute("DELETE FROM scenes WHERE id = ?", (scene_id,))
+        self.conn.commit()
+
     def set_binned(self, take_id: int, is_binned: bool) -> None:
         self.conn.execute(
             "UPDATE takes SET is_binned = ? WHERE id = ?", (1 if is_binned else 0, take_id)
@@ -264,6 +305,11 @@ class Database:
         return self.conn.execute(
             "SELECT * FROM comments WHERE take_id = ? ORDER BY created_at", (take_id,)
         ).fetchall()
+
+    def comment_count(self, take_id: int) -> int:
+        return self.conn.execute(
+            "SELECT COUNT(*) FROM comments WHERE take_id = ?", (take_id,)
+        ).fetchone()[0]
 
     def add_comment(self, take_id: int, body: str) -> None:
         self.conn.execute(

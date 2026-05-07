@@ -1,4 +1,4 @@
-# ShotRack 0.0.1
+# ShotRack 0.0.2
 
 ShotRack is a local Windows desktop app for managing AI-generated image, video, and audio takes.
 
@@ -41,7 +41,7 @@ If `python` is not on PATH, replace `python` with the full path to your Python 3
 The portable app is written to:
 
 ```text
-dist/ShotRack-0.0.1/
+dist/ShotRack-0.0.2/
 ```
 
 ## Project format

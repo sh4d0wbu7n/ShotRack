@@ -5,8 +5,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QUrl, Qt, QSize
-from PySide6.QtGui import QAction, QIcon, QKeySequence, QPixmap
+from PySide6.QtCore import QMimeData, QUrl, Qt, QSize
+from PySide6.QtGui import QAction, QBrush, QColor, QDrag, QIcon, QKeySequence, QPainter, QPen, QPixmap
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (
@@ -38,6 +38,9 @@ from PySide6.QtWidgets import (
 
 from .db import Database, STATUSES, Take
 from .media import (
+    delete_scene_files_and_record,
+    delete_shot_files_and_record,
+    delete_take_files_and_record,
     ensure_project_dirs,
     export_approved,
     import_take,
@@ -55,6 +58,8 @@ class TakeList(QListWidget):
         super().__init__()
         self.window = window
         self.setAcceptDrops(True)
+        self.setDragEnabled(True)
+        self.setDefaultDropAction(Qt.CopyAction)
         self.setViewMode(QListWidget.IconMode)
         self.setIconSize(QSize(180, 104))
         self.setResizeMode(QListWidget.Adjust)
@@ -80,6 +85,23 @@ class TakeList(QListWidget):
             event.acceptProposedAction()
         else:
             super().dropEvent(event)
+
+    def startDrag(self, supported_actions) -> None:  # type: ignore[no-untyped-def]
+        urls = []
+        for item in self.selectedItems():
+            take_id = item.data(Qt.UserRole)
+            take = self.window.db.take(take_id) if self.window.db else None
+            if take:
+                media = project_path(self.window.project_root_path(), take.media_path)
+                if media and media.exists():
+                    urls.append(QUrl.fromLocalFile(str(media)))
+        if not urls:
+            return
+        mime_data = QMimeData()
+        mime_data.setUrls(urls)
+        drag = QDrag(self)
+        drag.setMimeData(mime_data)
+        drag.exec(Qt.CopyAction)
 
 
 class MainWindow(QMainWindow):
@@ -152,13 +174,17 @@ class MainWindow(QMainWindow):
 
         self.open_media_button = QPushButton("Open Media")
         self.open_media_button.clicked.connect(self.open_media)
-        self.open_sidecar_button = QPushButton("Open Workflow PNG")
+        self.open_sidecar_button = QPushButton("Open PNG/Image")
         self.open_sidecar_button.clicked.connect(self.open_sidecar)
         self.bin_button = QPushButton("Move to Bin")
         self.bin_button.clicked.connect(self.bin_current_take)
+        self.delete_take_button = QPushButton("Delete Asset")
+        self.delete_take_button.clicked.connect(self.delete_current_take)
 
         self.scene_number = QSpinBox()
         self.scene_number.setRange(1, 999)
+        self.scene_description = QLineEdit()
+        self.scene_description.setPlaceholderText("scene_description")
         self.shot_number = QSpinBox()
         self.shot_number.setRange(10, 9990)
         self.shot_number.setSingleStep(10)
@@ -166,6 +192,10 @@ class MainWindow(QMainWindow):
         self.shot_description.setPlaceholderText("human_description")
         self.save_shot_button = QPushButton("Save Scene/Shot")
         self.save_shot_button.clicked.connect(self.save_scene_shot)
+        self.delete_scene_button = QPushButton("Delete Scene")
+        self.delete_scene_button.clicked.connect(self.delete_current_scene)
+        self.delete_shot_button = QPushButton("Delete Shot")
+        self.delete_shot_button.clicked.connect(self.delete_current_shot)
 
         self.bin_list = QListWidget()
         self.restore_button = QPushButton("Restore Selected")
@@ -207,6 +237,7 @@ class MainWindow(QMainWindow):
         button_row.addWidget(self.open_sidecar_button)
         details_layout.addLayout(button_row)
         details_layout.addWidget(self.bin_button)
+        details_layout.addWidget(self.delete_take_button)
         details_layout.addWidget(QLabel("Comments"))
         details_layout.addWidget(self.comments, 1)
         details_layout.addWidget(self.comment_edit)
@@ -216,9 +247,12 @@ class MainWindow(QMainWindow):
         shot_editor = QWidget()
         shot_layout = QFormLayout(shot_editor)
         shot_layout.addRow("Scene", self.scene_number)
+        shot_layout.addRow("Scene Description", self.scene_description)
         shot_layout.addRow("Shot", self.shot_number)
         shot_layout.addRow("Description", self.shot_description)
         shot_layout.addRow(self.save_shot_button)
+        shot_layout.addRow(self.delete_shot_button)
+        shot_layout.addRow(self.delete_scene_button)
         right_tabs.addTab(shot_editor, "Shot")
 
         bin_tab = QWidget()
@@ -250,6 +284,14 @@ class MainWindow(QMainWindow):
         add_shot = QAction("Add Shot", self)
         add_shot.triggered.connect(self.add_shot)
         toolbar.addAction(add_shot)
+
+        delete_scene = QAction("Delete Scene", self)
+        delete_scene.triggered.connect(self.delete_current_scene)
+        toolbar.addAction(delete_scene)
+
+        delete_shot = QAction("Delete Shot", self)
+        delete_shot.triggered.connect(self.delete_current_shot)
+        toolbar.addAction(delete_shot)
 
         import_media = QAction("Import Media", self)
         import_media.triggered.connect(self.choose_import_files)
@@ -288,14 +330,24 @@ class MainWindow(QMainWindow):
 
     def update_enabled_state(self) -> None:
         has_project = self.db is not None
+        has_scene = self.current_scene_id is not None
         has_shot = self.current_shot_id is not None
         has_take = self.current_take_id is not None
         for widget in [
             self.take_list,
+        ]:
+            widget.setEnabled(has_project and has_shot)
+        for widget in [
             self.scene_number,
+            self.scene_description,
+            self.delete_scene_button,
+            self.save_shot_button,
+        ]:
+            widget.setEnabled(has_project and has_scene)
+        for widget in [
             self.shot_number,
             self.shot_description,
-            self.save_shot_button,
+            self.delete_shot_button,
         ]:
             widget.setEnabled(has_project and has_shot)
         for widget in [
@@ -305,13 +357,14 @@ class MainWindow(QMainWindow):
             self.add_comment_button,
             self.open_media_button,
             self.bin_button,
+            self.delete_take_button,
             self.play_button,
             self.stop_button,
             self.position_slider,
         ]:
             widget.setEnabled(has_take)
         take = self.current_take()
-        self.open_sidecar_button.setEnabled(bool(take and take.sidecar_path))
+        self.open_sidecar_button.setEnabled(bool(take and (take.sidecar_path or take.media_type == "image")))
         can_play = bool(take and take.media_type in {"video", "audio"})
         self.play_button.setEnabled(can_play)
         self.stop_button.setEnabled(can_play)
@@ -362,7 +415,10 @@ class MainWindow(QMainWindow):
         if not self.db:
             return
         for scene in self.db.scenes():
-            scene_item = QTreeWidgetItem([scene_code(scene.number)])
+            scene_label = scene_code(scene.number)
+            if scene.description:
+                scene_label = f"{scene_label}  {scene.description}"
+            scene_item = QTreeWidgetItem([scene_label])
             scene_item.setData(0, Qt.UserRole, ("scene", scene.id))
             self.tree.addTopLevelItem(scene_item)
             for shot in self.db.shots_for_scene(scene.id):
@@ -383,12 +439,19 @@ class MainWindow(QMainWindow):
             return
         selected_item = None
         for take in self.db.takes_for_shot(self.current_shot_id):
-            label = f"TK_{take.take_number:03d}\n{take.status}\n{'*' * take.stars}"
+            comment_count = self.db.comment_count(take.id)
+            comment_marker = f"\nComments: {comment_count}" if comment_count else ""
+            label = f"TK_{take.take_number:03d}\n{take.status}\n{'*' * take.stars}{comment_marker}"
             item = QListWidgetItem(label)
             item.setData(Qt.UserRole, take.id)
+            if take.status == "Approved":
+                item.setBackground(QBrush(QColor("#1f7a3a")))
+                item.setForeground(QBrush(QColor("#ffffff")))
+            elif comment_count:
+                item.setBackground(QBrush(QColor("#3a4658")))
             thumb = project_path(self.project_root_path(), take.thumbnail_path)
             if thumb and thumb.exists():
-                item.setIcon(QIcon(str(thumb)))
+                item.setIcon(make_take_icon(thumb, take.status == "Approved", comment_count > 0))
             self.take_list.addItem(item)
             if take.id == selected_take_id:
                 selected_item = item
@@ -418,6 +481,7 @@ class MainWindow(QMainWindow):
             self.current_scene_id = item_id
             self.current_shot_id = None
             self.current_take_id = None
+            self.populate_scene_editor()
         elif kind == "shot":
             self.current_shot_id = item_id
             shot = self.db.shot(item_id) if self.db else None
@@ -440,8 +504,20 @@ class MainWindow(QMainWindow):
         scene = self.db.scene(shot.scene_id)
         self._building_ui = True
         self.scene_number.setValue(scene.number)
+        self.scene_description.setText(scene.description)
         self.shot_number.setValue(shot.number)
         self.shot_description.setText(shot.description)
+        self._building_ui = False
+
+    def populate_scene_editor(self) -> None:
+        if not self.db or not self.current_scene_id:
+            return
+        scene = self.db.scene(self.current_scene_id)
+        self._building_ui = True
+        self.scene_number.setValue(scene.number)
+        self.scene_description.setText(scene.description)
+        self.shot_number.setValue(10)
+        self.shot_description.clear()
         self._building_ui = False
 
     def refresh_take_detail(self) -> None:
@@ -501,7 +577,10 @@ class MainWindow(QMainWindow):
         scene = self.db.create_scene()
         self.current_scene_id = scene.id
         self.current_shot_id = None
+        self.current_take_id = None
         self.refresh_tree()
+        self.populate_scene_editor()
+        self.update_enabled_state()
 
     def add_shot(self) -> None:
         if not self.db:
@@ -520,18 +599,18 @@ class MainWindow(QMainWindow):
         self.refresh_takes()
 
     def save_scene_shot(self) -> None:
-        if not self.db or not self.current_shot_id:
+        if not self.db or not self.current_scene_id:
             return
-        shot = self.db.shot(self.current_shot_id)
-        old_scene = self.db.scene(shot.scene_id)
         new_scene_number = self.scene_number.value()
-        new_shot_number = self.shot_number.value()
-        description = snake_case(self.shot_description.text())
+        scene_description = self.scene_description.text().strip()
         try:
-            self.db.update_scene_number(old_scene.id, new_scene_number)
-            self.db.update_shot(self.current_shot_id, new_shot_number, description)
-            updated_shot = self.db.shot(self.current_shot_id)
-            rebuild_take_paths(self.db, self.project_root_path(), updated_shot, new_scene_number)
+            self.db.update_scene(self.current_scene_id, new_scene_number, scene_description)
+            if self.current_shot_id:
+                new_shot_number = self.shot_number.value()
+                description = snake_case(self.shot_description.text())
+                self.db.update_shot(self.current_shot_id, new_shot_number, description)
+            for shot in self.db.shots_for_scene(self.current_scene_id):
+                rebuild_take_paths(self.db, self.project_root_path(), shot, new_scene_number)
         except Exception as exc:
             QMessageBox.critical(self, "Rename Failed", str(exc))
         self.refresh_all()
@@ -602,6 +681,7 @@ class MainWindow(QMainWindow):
             return
         self.db.add_comment(self.current_take_id, body)
         self.comment_edit.clear()
+        self.refresh_takes()
         self.refresh_take_detail()
 
     def open_media(self) -> None:
@@ -614,7 +694,11 @@ class MainWindow(QMainWindow):
         take = self.current_take()
         if not take:
             return
-        self.open_folder_selecting(project_path(self.project_root_path(), take.sidecar_path))
+        if take.sidecar_path:
+            self.open_folder_selecting(project_path(self.project_root_path(), take.sidecar_path))
+            return
+        if take.media_type == "image":
+            self.open_folder_selecting(project_path(self.project_root_path(), take.media_path))
 
     def open_path(self, path: Path | None) -> None:
         if not path or not path.exists():
@@ -641,6 +725,64 @@ class MainWindow(QMainWindow):
             self.refresh_all()
         except Exception as exc:
             QMessageBox.critical(self, "Move Failed", str(exc))
+
+    def delete_current_take(self) -> None:
+        take = self.current_take()
+        if not self.db or not take:
+            return
+        reply = QMessageBox.question(
+            self,
+            "Delete Asset",
+            "Permanently delete this asset from the database and filesystem?",
+        )
+        if reply != QMessageBox.Yes:
+            return
+        try:
+            delete_take_files_and_record(self.db, self.project_root_path(), take)
+            self.current_take_id = None
+            self.refresh_all()
+        except Exception as exc:
+            QMessageBox.critical(self, "Delete Failed", str(exc))
+
+    def delete_current_shot(self) -> None:
+        if not self.db or not self.current_shot_id:
+            return
+        shot = self.db.shot(self.current_shot_id)
+        scene = self.db.scene(shot.scene_id)
+        reply = QMessageBox.question(
+            self,
+            "Delete Shot",
+            f"Permanently delete {scene_code(scene.number)} {shot_code(shot.number)} and all of its assets?",
+        )
+        if reply != QMessageBox.Yes:
+            return
+        try:
+            delete_shot_files_and_record(self.db, self.project_root_path(), shot, scene.number)
+            self.current_shot_id = None
+            self.current_take_id = None
+            self.refresh_all()
+        except Exception as exc:
+            QMessageBox.critical(self, "Delete Failed", str(exc))
+
+    def delete_current_scene(self) -> None:
+        if not self.db or not self.current_scene_id:
+            return
+        scene = self.db.scene(self.current_scene_id)
+        reply = QMessageBox.question(
+            self,
+            "Delete Scene",
+            f"Permanently delete {scene_code(scene.number)} and all shots/assets in it?",
+        )
+        if reply != QMessageBox.Yes:
+            return
+        try:
+            delete_scene_files_and_record(self.db, self.project_root_path(), scene.id)
+            self.current_scene_id = None
+            self.current_shot_id = None
+            self.current_take_id = None
+            self.refresh_all()
+        except Exception as exc:
+            QMessageBox.critical(self, "Delete Failed", str(exc))
 
     def restore_selected_take(self) -> None:
         if not self.db:
@@ -753,6 +895,30 @@ def format_ms(value: int) -> str:
     if hours:
         return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
     return f"{minutes:02d}:{seconds:02d}"
+
+
+def make_take_icon(thumb: Path, approved: bool, has_comment: bool) -> QIcon:
+    pixmap = QPixmap(str(thumb)).scaled(180, 104, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+    canvas = QPixmap(180, 104)
+    canvas.fill(QColor("#20242b"))
+
+    painter = QPainter(canvas)
+    x = (canvas.width() - pixmap.width()) // 2
+    y = (canvas.height() - pixmap.height()) // 2
+    painter.drawPixmap(x, y, pixmap)
+    if approved:
+        pen = QPen(QColor("#27ae60"))
+        pen.setWidth(5)
+        painter.setPen(pen)
+        painter.drawRect(2, 2, canvas.width() - 5, canvas.height() - 5)
+    if has_comment:
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QBrush(QColor("#ffd166")))
+        painter.drawEllipse(canvas.width() - 28, 8, 18, 18)
+        painter.setPen(QColor("#111418"))
+        painter.drawText(canvas.width() - 28, 8, 18, 18, Qt.AlignCenter, "C")
+    painter.end()
+    return QIcon(canvas)
 
 
 def main() -> int:
