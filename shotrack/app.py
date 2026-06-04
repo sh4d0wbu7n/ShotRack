@@ -524,6 +524,25 @@ class MainWindow(QMainWindow):
             QListWidget#commentList {
                 min-height: 170px;
             }
+            QListWidget#commentList::item {
+                background: #282a24;
+                border: 1px solid #383a32;
+                border-radius: 6px;
+                padding: 0;
+                margin: 4px 2px;
+            }
+            QListWidget#commentList::item:selected {
+                background: #303329;
+                border-color: #6f8f47;
+            }
+            QLabel#commentTimestamp {
+                color: #b8c0a4;
+                font-size: 8pt;
+            }
+            QLabel#commentBody {
+                color: #f6f4ea;
+                font-size: 10pt;
+            }
             QLineEdit:focus,
             QTextEdit:focus,
             QComboBox:focus,
@@ -898,10 +917,34 @@ class MainWindow(QMainWindow):
                 self.preview_label.setText(take.media_type.upper())
         if self.db:
             for comment in self.db.comments(take.id):
-                item = QListWidgetItem(f"{comment['created_at']}\n{comment['body']}")
-                item.setSizeHint(QSize(0, 44))
+                body = str(comment["body"])
+                item = QListWidgetItem()
+                item.setSizeHint(QSize(0, comment_item_height(body)))
+                item.setToolTip(body)
                 self.comments.addItem(item)
+                self.comments.setItemWidget(
+                    item,
+                    self.comment_item_widget(str(comment["created_at"]), body),
+                )
         self._building_ui = False
+
+    def comment_item_widget(self, created_at: str, body: str) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(3)
+
+        timestamp = QLabel(created_at)
+        timestamp.setObjectName("commentTimestamp")
+        timestamp.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        content = QLabel(body)
+        content.setObjectName("commentBody")
+        content.setWordWrap(True)
+        content.setTextInteractionFlags(Qt.TextSelectableByMouse)
+
+        layout.addWidget(timestamp)
+        layout.addWidget(content)
+        return widget
 
     def add_scene(self) -> None:
         if not self.db:
@@ -1244,6 +1287,10 @@ def format_ms(value: int) -> str:
     return f"{minutes:02d}:{seconds:02d}"
 
 
+def comment_item_height(body: str) -> int:
+    return min(150, max(68, 58 + (len(body) // 48) * 18))
+
+
 def asset_type_label(take: Take) -> str:
     labels = {
         "audio": "AUDIO",
@@ -1277,6 +1324,7 @@ def make_take_icon(thumb: Path, approved: bool, has_comment: bool, media_type: s
         pen = QPen(QColor("#27ae60"))
         pen.setWidth(5)
         painter.setPen(pen)
+        painter.setBrush(Qt.NoBrush)
         painter.drawRect(2, 2, canvas.width() - 5, canvas.height() - 5)
     if has_comment:
         painter.setPen(Qt.NoPen)
