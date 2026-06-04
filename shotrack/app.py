@@ -135,11 +135,11 @@ class MainWindow(QMainWindow):
         self.preview_label = QLabel("Open or create a project.")
         self.preview_label.setObjectName("previewSurface")
         self.preview_label.setAlignment(Qt.AlignCenter)
-        self.preview_label.setMinimumHeight(240)
+        self.preview_label.setMinimumHeight(190)
 
         self.video_widget = QVideoWidget()
         self.video_widget.setObjectName("previewSurface")
-        self.video_widget.setMinimumHeight(240)
+        self.video_widget.setMinimumHeight(190)
 
         self.player = QMediaPlayer(self)
         self.audio_output = QAudioOutput(self)
@@ -177,9 +177,13 @@ class MainWindow(QMainWindow):
         self.status.currentTextChanged.connect(self.save_review)
 
         self.comments = QListWidget()
+        self.comments.setObjectName("commentList")
+        self.comments.setMinimumHeight(170)
+        self.comments.setWordWrap(True)
         self.comment_edit = QTextEdit()
+        self.comment_edit.setObjectName("commentEdit")
         self.comment_edit.setPlaceholderText("Add comment...")
-        self.comment_edit.setFixedHeight(82)
+        self.comment_edit.setFixedHeight(58)
         self.add_comment_button = QPushButton("Add Comment")
         self.add_comment_button.setObjectName("primaryButton")
         self.add_comment_button.clicked.connect(self.add_comment)
@@ -215,6 +219,9 @@ class MainWindow(QMainWindow):
         self.delete_shot_button = QPushButton("Delete Shot")
         self.delete_shot_button.setObjectName("dangerButton")
         self.delete_shot_button.clicked.connect(self.delete_current_shot)
+        self.open_scene_folder_button = QPushButton("Open Scene Folder")
+        self.open_scene_folder_button.setObjectName("secondaryButton")
+        self.open_scene_folder_button.clicked.connect(self.open_scene_folder)
 
         self.bin_list = QListWidget()
         self.bin_list.setObjectName("binList")
@@ -271,8 +278,11 @@ class MainWindow(QMainWindow):
         button_row.addWidget(self.open_media_button)
         button_row.addWidget(self.open_sidecar_button)
         details_layout.addLayout(button_row)
-        details_layout.addWidget(self.bin_button)
-        details_layout.addWidget(self.delete_take_button)
+        manage_row = QHBoxLayout()
+        manage_row.setSpacing(8)
+        manage_row.addWidget(self.bin_button)
+        manage_row.addWidget(self.delete_take_button)
+        details_layout.addLayout(manage_row)
         details_layout.addWidget(self.section_label("Comments"))
         details_layout.addWidget(self.comments, 1)
         details_layout.addWidget(self.comment_edit)
@@ -289,6 +299,7 @@ class MainWindow(QMainWindow):
         shot_layout.addRow("Shot", self.shot_number)
         shot_layout.addRow("Description", self.shot_description)
         shot_layout.addRow(self.save_shot_button)
+        shot_layout.addRow(self.open_scene_folder_button)
         shot_layout.addRow(self.delete_shot_button)
         shot_layout.addRow(self.delete_scene_button)
         right_tabs.addTab(shot_editor, "Shot")
@@ -327,6 +338,10 @@ class MainWindow(QMainWindow):
         add_shot = QAction("Add Shot", self)
         add_shot.triggered.connect(self.add_shot)
         toolbar.addAction(add_shot)
+
+        self.open_scene_folder_action = QAction("Open Scene Folder", self)
+        self.open_scene_folder_action.triggered.connect(self.open_scene_folder)
+        toolbar.addAction(self.open_scene_folder_action)
 
         delete_scene = QAction("Delete Scene", self)
         delete_scene.triggered.connect(self.delete_current_scene)
@@ -504,7 +519,10 @@ class MainWindow(QMainWindow):
                 selection-background-color: #6f8f47;
             }
             QTextEdit {
-                min-height: 70px;
+                min-height: 48px;
+            }
+            QListWidget#commentList {
+                min-height: 170px;
             }
             QLineEdit:focus,
             QTextEdit:focus,
@@ -513,9 +531,9 @@ class MainWindow(QMainWindow):
                 border-color: #8fae68;
             }
             QPushButton {
-                min-height: 30px;
+                min-height: 24px;
                 border-radius: 6px;
-                padding: 6px 10px;
+                padding: 4px 8px;
                 font-weight: 600;
             }
             QPushButton#primaryButton {
@@ -595,8 +613,10 @@ class MainWindow(QMainWindow):
             self.scene_description,
             self.delete_scene_button,
             self.save_shot_button,
+            self.open_scene_folder_button,
         ]:
             widget.setEnabled(has_project and has_scene)
+        self.open_scene_folder_action.setEnabled(has_project and has_scene)
         for widget in [
             self.shot_number,
             self.shot_description,
@@ -694,7 +714,11 @@ class MainWindow(QMainWindow):
         for take in self.db.takes_for_shot(self.current_shot_id):
             comment_count = self.db.comment_count(take.id)
             comment_marker = f"\nComments: {comment_count}" if comment_count else ""
-            label = f"TK_{take.take_number:03d}\n{take.status}\n{'*' * take.stars}{comment_marker}"
+            label = (
+                f"TK_{take.take_number:03d}  {asset_type_label(take)}\n"
+                f"{take.status}\n"
+                f"{'*' * take.stars}{comment_marker}"
+            )
             item = QListWidgetItem(label)
             item.setData(Qt.UserRole, take.id)
             if take.status == "Approved":
@@ -704,7 +728,14 @@ class MainWindow(QMainWindow):
                 item.setBackground(QBrush(QColor("#3a4658")))
             thumb = project_path(self.project_root_path(), take.thumbnail_path)
             if thumb and thumb.exists():
-                item.setIcon(make_take_icon(thumb, take.status == "Approved", comment_count > 0))
+                item.setIcon(
+                    make_take_icon(
+                        thumb,
+                        take.status == "Approved",
+                        comment_count > 0,
+                        take.media_type,
+                    )
+                )
             self.take_list.addItem(item)
             if take.id == selected_take_id:
                 selected_item = item
@@ -867,7 +898,9 @@ class MainWindow(QMainWindow):
                 self.preview_label.setText(take.media_type.upper())
         if self.db:
             for comment in self.db.comments(take.id):
-                self.comments.addItem(f"{comment['created_at']}  {comment['body']}")
+                item = QListWidgetItem(f"{comment['created_at']}\n{comment['body']}")
+                item.setSizeHint(QSize(0, 44))
+                self.comments.addItem(item)
         self._building_ui = False
 
     def add_scene(self) -> None:
@@ -1000,11 +1033,25 @@ class MainWindow(QMainWindow):
         if take.media_type == "image":
             self.open_folder_selecting(project_path(self.project_root_path(), take.media_path))
 
+    def open_scene_folder(self) -> None:
+        if not self.db or not self.current_scene_id:
+            return
+        scene = self.db.scene(self.current_scene_id)
+        folder = self.project_root_path() / "media" / scene_code(scene.number)
+        folder.mkdir(parents=True, exist_ok=True)
+        self.open_folder(folder)
+
     def open_path(self, path: Path | None) -> None:
         if not path or not path.exists():
             QMessageBox.warning(self, "Missing File", "The file does not exist.")
             return
         os.startfile(path)  # type: ignore[attr-defined]
+
+    def open_folder(self, path: Path | None) -> None:
+        if not path or not path.exists():
+            QMessageBox.warning(self, "Missing Folder", "The folder does not exist.")
+            return
+        subprocess.Popen(["explorer", str(path)])
 
     def open_folder_selecting(self, path: Path | None) -> None:
         if not path or not path.exists():
@@ -1197,15 +1244,35 @@ def format_ms(value: int) -> str:
     return f"{minutes:02d}:{seconds:02d}"
 
 
-def make_take_icon(thumb: Path, approved: bool, has_comment: bool) -> QIcon:
+def asset_type_label(take: Take) -> str:
+    labels = {
+        "audio": "AUDIO",
+        "video": "VIDEO",
+        "image": "IMAGE",
+    }
+    return labels.get(take.media_type, take.media_type.upper() or "FILE")
+
+
+def make_take_icon(thumb: Path, approved: bool, has_comment: bool, media_type: str) -> QIcon:
     pixmap = QPixmap(str(thumb)).scaled(180, 104, Qt.KeepAspectRatio, Qt.SmoothTransformation)
     canvas = QPixmap(180, 104)
     canvas.fill(QColor("#20242b"))
 
     painter = QPainter(canvas)
+    painter.setRenderHint(QPainter.Antialiasing)
     x = (canvas.width() - pixmap.width()) // 2
     y = (canvas.height() - pixmap.height()) // 2
     painter.drawPixmap(x, y, pixmap)
+    badge_text, badge_color = asset_badge(media_type)
+    painter.setPen(Qt.NoPen)
+    painter.setBrush(QBrush(QColor(badge_color)))
+    painter.drawRoundedRect(8, 8, 54, 20, 5, 5)
+    painter.setPen(QColor("#ffffff"))
+    font = painter.font()
+    font.setBold(True)
+    font.setPointSize(8)
+    painter.setFont(font)
+    painter.drawText(8, 8, 54, 20, Qt.AlignCenter, badge_text)
     if approved:
         pen = QPen(QColor("#27ae60"))
         pen.setWidth(5)
@@ -1219,6 +1286,15 @@ def make_take_icon(thumb: Path, approved: bool, has_comment: bool) -> QIcon:
         painter.drawText(canvas.width() - 28, 8, 18, 18, Qt.AlignCenter, "C")
     painter.end()
     return QIcon(canvas)
+
+
+def asset_badge(media_type: str) -> tuple[str, str]:
+    badges = {
+        "audio": ("AUD", "#7864d8"),
+        "video": ("VID", "#2d80b3"),
+        "image": ("IMG", "#c46a27"),
+    }
+    return badges.get(media_type, ("FILE", "#69707a"))
 
 
 def main() -> int:
