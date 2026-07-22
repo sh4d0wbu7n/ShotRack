@@ -1,4 +1,4 @@
-# ShotRack 0.0.5
+# ShotRack 0.0.6
 
 ShotRack is a local Windows desktop app for managing AI-generated image, video, and audio takes.
 
@@ -11,6 +11,8 @@ ShotRack is a local Windows desktop app for managing AI-generated image, video, 
 - Video + PNG dragged together means the PNG is stored as a workflow sidecar.
 - PNG alone is imported as an image take.
 - Ratings, statuses, and comment history.
+- Per-take model and prompt tracking.
+- Persistent overview canvas for arranging existing project assets.
 - Move to project bin and restore.
 - Export approved takes to one flat export folder.
 
@@ -41,7 +43,7 @@ If `python` is not on PATH, replace `python` with the full path to your Python 3
 The portable app is written to:
 
 ```text
-dist/ShotRack-0.0.5/
+dist/ShotRack-0.0.6/
 ```
 
 ## Project format

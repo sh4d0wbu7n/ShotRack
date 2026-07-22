@@ -52,6 +52,18 @@ class Take:
     is_binned: int
     exported_at: str | None
     created_at: str
+    model: str
+    prompt: str
+
+
+@dataclass(frozen=True)
+class CanvasPlacement:
+    id: int
+    take_id: int
+    x: float
+    y: float
+    width: float
+    height: float
 
 
 class Database:
@@ -105,9 +117,21 @@ class Database:
                 body TEXT NOT NULL,
                 created_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS canvas_items (
+                id INTEGER PRIMARY KEY,
+                take_id INTEGER NOT NULL REFERENCES takes(id) ON DELETE CASCADE,
+                x REAL NOT NULL DEFAULT 0,
+                y REAL NOT NULL DEFAULT 0,
+                width REAL NOT NULL DEFAULT 240,
+                height REAL NOT NULL DEFAULT 135,
+                UNIQUE(take_id)
+            );
             """
         )
         self.ensure_column("scenes", "description", "TEXT NOT NULL DEFAULT ''")
+        self.ensure_column("takes", "model", "TEXT NOT NULL DEFAULT ''")
+        self.ensure_column("takes", "prompt", "TEXT NOT NULL DEFAULT ''")
         self.conn.commit()
 
     def ensure_column(self, table: str, column: str, definition: str) -> None:
@@ -187,13 +211,15 @@ class Database:
         media_path: str,
         sidecar_path: str | None,
         thumbnail_path: str | None,
+        model: str = "",
+        prompt: str = "",
     ) -> Take:
         cur = self.conn.execute(
             """
             INSERT INTO takes(
                 shot_id, take_number, media_type, original_name, media_path,
-                sidecar_path, thumbnail_path, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                sidecar_path, thumbnail_path, created_at, model, prompt
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 shot_id,
@@ -204,6 +230,8 @@ class Database:
                 sidecar_path,
                 thumbnail_path,
                 now_iso(),
+                model,
+                prompt,
             ),
         )
         self.conn.commit()
@@ -249,6 +277,13 @@ class Database:
         self.conn.execute(
             "UPDATE takes SET stars = ?, status = ? WHERE id = ?",
             (stars, status, take_id),
+        )
+        self.conn.commit()
+
+    def update_take_generation(self, take_id: int, model: str, prompt: str) -> None:
+        self.conn.execute(
+            "UPDATE takes SET model = ?, prompt = ? WHERE id = ?",
+            (model, prompt, take_id),
         )
         self.conn.commit()
 
@@ -316,4 +351,51 @@ class Database:
             "INSERT INTO comments(take_id, body, created_at) VALUES (?, ?, ?)",
             (take_id, body, now_iso()),
         )
+        self.conn.commit()
+
+    def canvas_items(self) -> list[CanvasPlacement]:
+        rows = self.conn.execute("SELECT * FROM canvas_items ORDER BY id").fetchall()
+        return [CanvasPlacement(**dict(row)) for row in rows]
+
+    def canvas_item_for_take(self, take_id: int) -> CanvasPlacement | None:
+        row = self.conn.execute(
+            "SELECT * FROM canvas_items WHERE take_id = ?", (take_id,)
+        ).fetchone()
+        return CanvasPlacement(**dict(row)) if row else None
+
+    def add_canvas_item(
+        self,
+        take_id: int,
+        x: float,
+        y: float,
+        width: float = 240,
+        height: float = 135,
+    ) -> CanvasPlacement:
+        cur = self.conn.execute(
+            """
+            INSERT INTO canvas_items(take_id, x, y, width, height)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(take_id) DO UPDATE SET
+                x = excluded.x,
+                y = excluded.y,
+                width = excluded.width,
+                height = excluded.height
+            """,
+            (take_id, x, y, width, height),
+        )
+        self.conn.commit()
+        placement = self.canvas_item_for_take(take_id)
+        if placement is None:
+            return CanvasPlacement(cur.lastrowid, take_id, x, y, width, height)
+        return placement
+
+    def update_canvas_item(self, item_id: int, x: float, y: float, width: float, height: float) -> None:
+        self.conn.execute(
+            "UPDATE canvas_items SET x = ?, y = ?, width = ?, height = ? WHERE id = ?",
+            (x, y, width, height, item_id),
+        )
+        self.conn.commit()
+
+    def delete_canvas_item(self, item_id: int) -> None:
+        self.conn.execute("DELETE FROM canvas_items WHERE id = ?", (item_id,))
         self.conn.commit()

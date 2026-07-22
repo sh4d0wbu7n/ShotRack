@@ -52,6 +52,8 @@ def import_take(
     shot: Shot,
     scene_number: int,
     paths: list[Path],
+    model: str = "",
+    prompt: str = "",
 ) -> Take:
     ensure_project_dirs(root)
     videos = [path for path in paths if is_video(path)]
@@ -90,6 +92,8 @@ def import_take(
         media_path=relative_to_project(root, target) or "",
         sidecar_path=relative_to_project(root, sidecar_target),
         thumbnail_path=relative_to_project(root, thumb_target) if thumb_target.exists() else None,
+        model=model,
+        prompt=prompt,
     )
 
 

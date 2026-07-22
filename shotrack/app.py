@@ -12,8 +12,15 @@ from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QFileDialog,
     QFormLayout,
+    QGraphicsItem,
+    QGraphicsPixmapItem,
+    QGraphicsScene,
+    QGraphicsTextItem,
+    QGraphicsView,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -37,7 +44,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .db import Database, STATUSES, Take
+from .db import CanvasPlacement, Database, STATUSES, Take
 from .media import (
     delete_scene_files_and_record,
     delete_shot_files_and_record,
@@ -52,6 +59,9 @@ from .media import (
 from . import __version__
 from .settings import load_last_project, save_last_project
 from .utils import project_path, scene_code, shot_code, snake_case
+
+
+TAKE_MIME_TYPE = "application/x-shotrack-take-id"
 
 
 class TakeList(QListWidget):
@@ -89,20 +99,112 @@ class TakeList(QListWidget):
 
     def startDrag(self, supported_actions) -> None:  # type: ignore[no-untyped-def]
         urls = []
+        take_ids = []
         for item in self.selectedItems():
             take_id = item.data(Qt.UserRole)
             take = self.window.db.take(take_id) if self.window.db else None
             if take:
+                take_ids.append(str(take.id))
                 media = project_path(self.window.project_root_path(), take.media_path)
                 if media and media.exists():
                     urls.append(QUrl.fromLocalFile(str(media)))
-        if not urls:
+        if not urls and not take_ids:
             return
         mime_data = QMimeData()
-        mime_data.setUrls(urls)
+        if urls:
+            mime_data.setUrls(urls)
+        if take_ids:
+            mime_data.setData(TAKE_MIME_TYPE, ",".join(take_ids).encode("utf-8"))
         drag = QDrag(self)
         drag.setMimeData(mime_data)
         drag.exec(Qt.CopyAction)
+
+
+class ImportMetadataDialog(QDialog):
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Import Generation Info")
+        self.resize(520, 340)
+
+        self.model = QLineEdit()
+        self.model.setPlaceholderText("Model used for this take")
+        self.prompt = QTextEdit()
+        self.prompt.setPlaceholderText("Prompt used for this take")
+        self.prompt.setMinimumHeight(180)
+
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+        form.setLabelAlignment(Qt.AlignLeft)
+        form.addRow("Model", self.model)
+        form.addRow("Prompt", self.prompt)
+        layout.addLayout(form)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def values(self) -> tuple[str, str]:
+        return self.model.text().strip(), self.prompt.toPlainText().strip()
+
+
+class CanvasView(QGraphicsView):
+    def __init__(self, window: "MainWindow") -> None:
+        super().__init__()
+        self.window = window
+        self.setAcceptDrops(True)
+        self.setDragMode(QGraphicsView.RubberBandDrag)
+        self.setRenderHint(QPainter.Antialiasing)
+        self.setScene(QGraphicsScene(self))
+        self.scene().setSceneRect(-3000, -3000, 6000, 6000)
+
+    def dragEnterEvent(self, event) -> None:  # type: ignore[no-untyped-def]
+        if event.mimeData().hasFormat(TAKE_MIME_TYPE):
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event) -> None:  # type: ignore[no-untyped-def]
+        if event.mimeData().hasFormat(TAKE_MIME_TYPE):
+            event.acceptProposedAction()
+        else:
+            super().dragMoveEvent(event)
+
+    def dropEvent(self, event) -> None:  # type: ignore[no-untyped-def]
+        if not event.mimeData().hasFormat(TAKE_MIME_TYPE):
+            super().dropEvent(event)
+            return
+        raw_ids = bytes(event.mimeData().data(TAKE_MIME_TYPE)).decode("utf-8")
+        scene_pos = self.mapToScene(event.position().toPoint())
+        for index, raw_id in enumerate(raw_ids.split(",")):
+            if raw_id.strip().isdigit():
+                self.window.add_take_to_canvas(
+                    int(raw_id),
+                    scene_pos.x() + index * 28,
+                    scene_pos.y() + index * 28,
+                )
+        event.acceptProposedAction()
+
+    def mouseReleaseEvent(self, event) -> None:  # type: ignore[no-untyped-def]
+        super().mouseReleaseEvent(event)
+        self.window.save_canvas_layout()
+
+    def mouseDoubleClickEvent(self, event) -> None:  # type: ignore[no-untyped-def]
+        item = self.itemAt(event.position().toPoint())
+        while item and item.data(0) is None and item.parentItem():
+            item = item.parentItem()
+        if item and item.data(0) is not None:
+            self.window.open_take_media(int(item.data(0)))
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
+    def keyPressEvent(self, event) -> None:  # type: ignore[no-untyped-def]
+        if event.key() in {Qt.Key_Delete, Qt.Key_Backspace}:
+            self.window.delete_selected_canvas_items()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
 
 class MainWindow(QMainWindow):
@@ -129,6 +231,7 @@ class MainWindow(QMainWindow):
         self.take_list = TakeList(self)
         self.take_list.setObjectName("takeGrid")
         self.take_list.itemSelectionChanged.connect(self.on_take_selection)
+        self.take_list.itemDoubleClicked.connect(lambda _item: self.open_media())
         self.take_list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.take_list.customContextMenuRequested.connect(self.show_take_context_menu)
 
@@ -175,6 +278,16 @@ class MainWindow(QMainWindow):
         self.status = QComboBox()
         self.status.addItems(STATUSES)
         self.status.currentTextChanged.connect(self.save_review)
+
+        self.model = QLineEdit()
+        self.model.setPlaceholderText("Model used")
+        self.prompt = QTextEdit()
+        self.prompt.setObjectName("promptEdit")
+        self.prompt.setPlaceholderText("Prompt used")
+        self.prompt.setFixedHeight(92)
+        self.save_generation_button = QPushButton("Save Generation Info")
+        self.save_generation_button.setObjectName("primaryButton")
+        self.save_generation_button.clicked.connect(self.save_generation_info)
 
         self.comments = QListWidget()
         self.comments.setObjectName("commentList")
@@ -229,6 +342,10 @@ class MainWindow(QMainWindow):
         self.restore_button.setObjectName("primaryButton")
         self.restore_button.clicked.connect(self.restore_selected_take)
 
+        self.canvas_view = CanvasView(self)
+        self.canvas_view.setObjectName("overviewCanvas")
+        self.canvas_scene = self.canvas_view.scene()
+
         self.build_layout()
         self.build_actions()
         self.apply_theme()
@@ -271,7 +388,10 @@ class MainWindow(QMainWindow):
         form.setVerticalSpacing(10)
         form.addRow("Stars", self.stars)
         form.addRow("Status", self.status)
+        form.addRow("Model", self.model)
+        form.addRow("Prompt", self.prompt)
         details_layout.addLayout(form)
+        details_layout.addWidget(self.save_generation_button)
 
         button_row = QHBoxLayout()
         button_row.setSpacing(8)
@@ -311,6 +431,12 @@ class MainWindow(QMainWindow):
         bin_layout.addWidget(self.bin_list)
         bin_layout.addWidget(self.restore_button)
         right_tabs.addTab(bin_tab, "Bin")
+
+        canvas_tab = QWidget()
+        canvas_layout = QVBoxLayout(canvas_tab)
+        canvas_layout.setContentsMargins(0, 0, 0, 0)
+        canvas_layout.addWidget(self.canvas_view)
+        right_tabs.addTab(canvas_tab, "Canvas")
 
         splitter.addWidget(right_tabs)
         splitter.setSizes([280, 610, 430])
@@ -427,7 +553,8 @@ class MainWindow(QMainWindow):
             QTreeWidget#sceneTree,
             QListWidget#takeGrid,
             QListWidget#binList,
-            QListWidget {
+            QListWidget,
+            QGraphicsView#overviewCanvas {
                 background: #20211d;
                 color: #f1f0e8;
                 border: 1px solid #383a32;
@@ -520,6 +647,9 @@ class MainWindow(QMainWindow):
             }
             QTextEdit {
                 min-height: 48px;
+            }
+            QTextEdit#promptEdit {
+                min-height: 82px;
             }
             QListWidget#commentList {
                 min-height: 170px;
@@ -645,6 +775,9 @@ class MainWindow(QMainWindow):
         for widget in [
             self.stars,
             self.status,
+            self.model,
+            self.prompt,
+            self.save_generation_button,
             self.comment_edit,
             self.add_comment_button,
             self.open_media_button,
@@ -655,6 +788,7 @@ class MainWindow(QMainWindow):
             self.position_slider,
         ]:
             widget.setEnabled(has_take)
+        self.canvas_view.setEnabled(has_project)
         take = self.current_take()
         self.open_sidecar_button.setEnabled(bool(take and (take.sidecar_path or take.media_type == "image")))
         can_play = bool(take and take.media_type in {"video", "audio"})
@@ -700,6 +834,7 @@ class MainWindow(QMainWindow):
         self.refresh_tree()
         self.refresh_takes()
         self.refresh_bin()
+        self.refresh_canvas()
         self.update_enabled_state()
 
     def refresh_tree(self) -> None:
@@ -883,11 +1018,15 @@ class MainWindow(QMainWindow):
             self.title_label.setText("No take selected")
             self.stars.setValue(0)
             self.status.setCurrentText("New")
+            self.model.clear()
+            self.prompt.clear()
             self._building_ui = False
             return
         self.title_label.setText(Path(take.media_path).name)
         self.stars.setValue(take.stars)
         self.status.setCurrentText(take.status)
+        self.model.setText(take.model)
+        self.prompt.setPlainText(take.prompt)
         media = project_path(self.project_root_path(), take.media_path)
         if take.media_type in {"video", "audio"} and media and media.exists():
             self.preview_stack.setCurrentWidget(self.video_widget)
@@ -999,10 +1138,22 @@ class MainWindow(QMainWindow):
         if missing:
             QMessageBox.warning(self, "Missing File", "\n".join(missing))
             return
+        dialog = ImportMetadataDialog(self)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        model, prompt = dialog.values()
         try:
             shot = self.db.shot(self.current_shot_id)
             scene = self.db.scene(shot.scene_id)
-            take = import_take(self.db, self.project_root_path(), shot, scene.number, paths)
+            take = import_take(
+                self.db,
+                self.project_root_path(),
+                shot,
+                scene.number,
+                paths,
+                model,
+                prompt,
+            )
             self.current_take_id = take.id
             self.refresh_takes()
         except Exception as exc:
@@ -1051,6 +1202,16 @@ class MainWindow(QMainWindow):
         )
         self.refresh_takes()
 
+    def save_generation_info(self) -> None:
+        if self._building_ui or not self.db or not self.current_take_id:
+            return
+        self.db.update_take_generation(
+            self.current_take_id,
+            self.model.text().strip(),
+            self.prompt.toPlainText().strip(),
+        )
+        self.refresh_takes()
+
     def add_comment(self) -> None:
         body = self.comment_edit.toPlainText().strip()
         if not body or not self.db or not self.current_take_id:
@@ -1064,6 +1225,12 @@ class MainWindow(QMainWindow):
         take = self.current_take()
         if not take:
             return
+        self.open_take_media(take.id)
+
+    def open_take_media(self, take_id: int) -> None:
+        if not self.db:
+            return
+        take = self.db.take(take_id)
         self.open_path(project_path(self.project_root_path(), take.media_path))
 
     def open_sidecar(self) -> None:
@@ -1219,6 +1386,84 @@ class MainWindow(QMainWindow):
             return None
         return mode
 
+    def refresh_canvas(self) -> None:
+        self.canvas_scene.clear()
+        if not self.db:
+            return
+        for placement in self.db.canvas_items():
+            try:
+                take = self.db.take(placement.take_id)
+            except Exception:
+                continue
+            self.add_canvas_graphics_item(placement, take)
+
+    def add_take_to_canvas(self, take_id: int, x: float, y: float) -> None:
+        if not self.db:
+            return
+        take = self.db.take(take_id)
+        placement = self.db.add_canvas_item(take.id, x, y)
+        self.refresh_canvas()
+        for item in self.canvas_scene.items():
+            if item.data(1) == placement.id:
+                self.canvas_scene.clearSelection()
+                item.setSelected(True)
+                self.canvas_view.centerOn(item)
+                break
+
+    def add_canvas_graphics_item(self, placement: CanvasPlacement, take: Take) -> None:
+        thumb = project_path(self.project_root_path(), take.thumbnail_path)
+        pixmap = QPixmap(str(thumb)) if thumb and thumb.exists() else QPixmap()
+        if pixmap.isNull():
+            pixmap = placeholder_pixmap(take.media_type)
+        pixmap = pixmap.scaled(
+            int(placement.width),
+            int(placement.height),
+            Qt.KeepAspectRatio,
+            Qt.SmoothTransformation,
+        )
+        item = QGraphicsPixmapItem(pixmap)
+        item.setPos(placement.x, placement.y)
+        item.setData(0, take.id)
+        item.setData(1, placement.id)
+        item.setFlag(QGraphicsItem.ItemIsMovable, True)
+        item.setFlag(QGraphicsItem.ItemIsSelectable, True)
+        item.setFlag(QGraphicsItem.ItemSendsGeometryChanges, True)
+        item.setToolTip(f"{Path(take.media_path).name}\nDouble-click to open")
+        label = QGraphicsTextItem(f"TK_{take.take_number:03d}  {asset_type_label(take)}", item)
+        label.setDefaultTextColor(QColor("#f6f4ea"))
+        label.setPos(0, pixmap.height() + 4)
+        self.canvas_scene.addItem(item)
+
+    def save_canvas_layout(self) -> None:
+        if not self.db:
+            return
+        for item in self.canvas_scene.items():
+            placement_id = item.data(1)
+            take_id = item.data(0)
+            if placement_id is None or take_id is None or item.parentItem() is not None:
+                continue
+            rect = item.boundingRect()
+            self.db.update_canvas_item(
+                int(placement_id),
+                item.pos().x(),
+                item.pos().y(),
+                rect.width(),
+                rect.height(),
+            )
+
+    def delete_selected_canvas_items(self) -> None:
+        if not self.db:
+            return
+        deleted = False
+        for item in list(self.canvas_scene.selectedItems()):
+            placement_id = item.data(1)
+            if placement_id is None:
+                continue
+            self.db.delete_canvas_item(int(placement_id))
+            deleted = True
+        if deleted:
+            self.refresh_canvas()
+
     def current_take(self) -> Take | None:
         if not self.db or not self.current_take_id:
             return None
@@ -1334,6 +1579,23 @@ def make_take_icon(thumb: Path, approved: bool, has_comment: bool, media_type: s
         painter.drawText(canvas.width() - 28, 8, 18, 18, Qt.AlignCenter, "C")
     painter.end()
     return QIcon(canvas)
+
+
+def placeholder_pixmap(media_type: str) -> QPixmap:
+    canvas = QPixmap(240, 135)
+    canvas.fill(QColor("#2b3038"))
+    painter = QPainter(canvas)
+    painter.setRenderHint(QPainter.Antialiasing)
+    painter.setPen(QPen(QColor("#5b6472")))
+    painter.drawRect(0, 0, canvas.width() - 1, canvas.height() - 1)
+    painter.setPen(QColor("#f1f3f5"))
+    font = painter.font()
+    font.setBold(True)
+    font.setPointSize(18)
+    painter.setFont(font)
+    painter.drawText(canvas.rect(), Qt.AlignCenter, asset_badge(media_type)[0])
+    painter.end()
+    return canvas
 
 
 def asset_badge(media_type: str) -> tuple[str, str]:
