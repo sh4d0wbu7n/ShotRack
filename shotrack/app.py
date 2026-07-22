@@ -307,6 +307,9 @@ class MainWindow(QMainWindow):
         self.open_sidecar_button = QPushButton("Open PNG/Image")
         self.open_sidecar_button.setObjectName("secondaryButton")
         self.open_sidecar_button.clicked.connect(self.open_sidecar)
+        self.add_canvas_button = QPushButton("Add to Canvas")
+        self.add_canvas_button.setObjectName("primaryButton")
+        self.add_canvas_button.clicked.connect(self.add_current_take_to_canvas)
         self.bin_button = QPushButton("Move to Bin")
         self.bin_button.setObjectName("secondaryButton")
         self.bin_button.clicked.connect(self.bin_current_take)
@@ -365,8 +368,8 @@ class MainWindow(QMainWindow):
         center_layout.addWidget(self.take_list, 1)
         splitter.addWidget(center)
 
-        right_tabs = QTabWidget()
-        right_tabs.setObjectName("detailTabs")
+        self.detail_tabs = QTabWidget()
+        self.detail_tabs.setObjectName("detailTabs")
         details = QWidget()
         details_layout = QVBoxLayout(details)
         details_layout.setContentsMargins(16, 16, 16, 16)
@@ -397,6 +400,7 @@ class MainWindow(QMainWindow):
         button_row.setSpacing(8)
         button_row.addWidget(self.open_media_button)
         button_row.addWidget(self.open_sidecar_button)
+        button_row.addWidget(self.add_canvas_button)
         details_layout.addLayout(button_row)
         manage_row = QHBoxLayout()
         manage_row.setSpacing(8)
@@ -407,7 +411,7 @@ class MainWindow(QMainWindow):
         details_layout.addWidget(self.comments, 1)
         details_layout.addWidget(self.comment_edit)
         details_layout.addWidget(self.add_comment_button)
-        right_tabs.addTab(details, "Take")
+        self.detail_tabs.addTab(details, "Take")
 
         shot_editor = QWidget()
         shot_layout = QFormLayout(shot_editor)
@@ -422,7 +426,7 @@ class MainWindow(QMainWindow):
         shot_layout.addRow(self.open_scene_folder_button)
         shot_layout.addRow(self.delete_shot_button)
         shot_layout.addRow(self.delete_scene_button)
-        right_tabs.addTab(shot_editor, "Shot")
+        self.detail_tabs.addTab(shot_editor, "Shot")
 
         bin_tab = QWidget()
         bin_layout = QVBoxLayout(bin_tab)
@@ -430,15 +434,15 @@ class MainWindow(QMainWindow):
         bin_layout.setSpacing(12)
         bin_layout.addWidget(self.bin_list)
         bin_layout.addWidget(self.restore_button)
-        right_tabs.addTab(bin_tab, "Bin")
+        self.detail_tabs.addTab(bin_tab, "Bin")
 
         canvas_tab = QWidget()
         canvas_layout = QVBoxLayout(canvas_tab)
         canvas_layout.setContentsMargins(0, 0, 0, 0)
         canvas_layout.addWidget(self.canvas_view)
-        right_tabs.addTab(canvas_tab, "Canvas")
+        self.detail_tabs.addTab(canvas_tab, "Canvas")
 
-        splitter.addWidget(right_tabs)
+        splitter.addWidget(self.detail_tabs)
         splitter.setSizes([280, 610, 430])
         self.setCentralWidget(splitter)
 
@@ -781,6 +785,7 @@ class MainWindow(QMainWindow):
             self.comment_edit,
             self.add_comment_button,
             self.open_media_button,
+            self.add_canvas_button,
             self.bin_button,
             self.delete_take_button,
             self.play_button,
@@ -975,6 +980,8 @@ class MainWindow(QMainWindow):
         open_sidecar = menu.addAction("Open PNG/Image")
         open_sidecar.setEnabled(bool(take.sidecar_path or take.media_type == "image"))
         open_sidecar.triggered.connect(self.open_sidecar)
+        add_canvas = menu.addAction("Add to Canvas")
+        add_canvas.triggered.connect(self.add_current_take_to_canvas)
         menu.addSeparator()
         move_to_bin = menu.addAction("Move to Bin")
         move_to_bin.triggered.connect(self.bin_current_take)
@@ -1403,8 +1410,27 @@ class MainWindow(QMainWindow):
         take = self.db.take(take_id)
         placement = self.db.add_canvas_item(take.id, x, y)
         self.refresh_canvas()
+        self.focus_canvas_item(placement.id)
+
+    def add_current_take_to_canvas(self) -> None:
+        take = self.current_take()
+        if not self.db or not take:
+            return
+        existing = self.db.canvas_item_for_take(take.id)
+        if existing:
+            self.detail_tabs.setCurrentWidget(self.canvas_view.parentWidget())
+            self.focus_canvas_item(existing.id)
+            return
+        center = self.canvas_view.mapToScene(self.canvas_view.viewport().rect().center())
+        offset = len(self.db.canvas_items()) * 24
+        placement = self.db.add_canvas_item(take.id, center.x() + offset, center.y() + offset)
+        self.refresh_canvas()
+        self.detail_tabs.setCurrentWidget(self.canvas_view.parentWidget())
+        self.focus_canvas_item(placement.id)
+
+    def focus_canvas_item(self, placement_id: int) -> None:
         for item in self.canvas_scene.items():
-            if item.data(1) == placement.id:
+            if item.data(1) == placement_id:
                 self.canvas_scene.clearSelection()
                 item.setSelected(True)
                 self.canvas_view.centerOn(item)
