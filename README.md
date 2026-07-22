@@ -1,4 +1,4 @@
-# ShotRack 0.0.1
+# ShotRack 0.0.6
 
 ShotRack is a local Windows desktop app for managing AI-generated image, video, and audio takes.
 
@@ -11,6 +11,8 @@ ShotRack is a local Windows desktop app for managing AI-generated image, video, 
 - Video + PNG dragged together means the PNG is stored as a workflow sidecar.
 - PNG alone is imported as an image take.
 - Ratings, statuses, and comment history.
+- Per-take model and prompt tracking.
+- Project overview boards in PureRef, with incremental asset syncing.
 - Move to project bin and restore.
 - Export approved takes to one flat export folder.
 
@@ -25,6 +27,18 @@ python -m venv .venv
 ```
 
 If `python` is not on PATH, replace `python` with the full path to your Python 3.13 executable.
+
+## PureRef integration
+
+PureRef 2.x must be installed separately at
+`C:\Program Files\PureRef\PureRef.exe` to use project boards. ShotRack launches
+PureRef as an external application and stores the project board as
+`ShotRack Canvas.pur` in the project folder.
+
+PureRef is not included in the ShotRack portable package and must not be copied
+into a distributed ShotRack package. Every PureRef user is responsible for
+installing it separately and holding the license required for their use. See
+the [PureRef license agreement](https://www.pureref.com/license.php).
 
 ## Run
 
@@ -41,7 +55,7 @@ If `python` is not on PATH, replace `python` with the full path to your Python 3
 The portable app is written to:
 
 ```text
-dist/ShotRack-0.0.1/
+dist/ShotRack-0.0.6/
 ```
 
 ## Project format
@@ -50,6 +64,7 @@ A ShotRack project folder contains:
 
 ```text
 project.db
+ShotRack Canvas.pur
 media/
 thumbnails/
 exports/approved/

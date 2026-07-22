@@ -52,6 +52,8 @@ def import_take(
     shot: Shot,
     scene_number: int,
     paths: list[Path],
+    model: str = "",
+    prompt: str = "",
 ) -> Take:
     ensure_project_dirs(root)
     videos = [path for path in paths if is_video(path)]
@@ -90,6 +92,8 @@ def import_take(
         media_path=relative_to_project(root, target) or "",
         sidecar_path=relative_to_project(root, sidecar_target),
         thumbnail_path=relative_to_project(root, thumb_target) if thumb_target.exists() else None,
+        model=model,
+        prompt=prompt,
     )
 
 
@@ -172,6 +176,38 @@ def rebuild_take_paths(db: Database, root: Path, shot: Shot, scene_number: int) 
             relative_to_project(root, new_sidecar),
             relative_to_project(root, new_thumb),
         )
+
+
+def delete_take_files_and_record(db: Database, root: Path, take: Take) -> None:
+    delete_take_files(root, take)
+    db.delete_take(take.id)
+
+
+def delete_shot_files_and_record(db: Database, root: Path, shot: Shot, scene_number: int) -> None:
+    for take in db.takes_for_shot(shot.id, include_binned=True):
+        delete_take_files(root, take)
+    shutil.rmtree(shot_folder(root, scene_number, shot.number), ignore_errors=True)
+    shutil.rmtree(thumb_folder(root, scene_number, shot.number), ignore_errors=True)
+    db.delete_shot(shot.id)
+
+
+def delete_scene_files_and_record(db: Database, root: Path, scene_id: int) -> None:
+    scene = db.scene(scene_id)
+    for take in db.takes_for_scene(scene_id, include_binned=True):
+        delete_take_files(root, take)
+    shutil.rmtree(root / "media" / scene_code(scene.number), ignore_errors=True)
+    shutil.rmtree(root / "thumbnails" / scene_code(scene.number), ignore_errors=True)
+    db.delete_scene(scene_id)
+
+
+def delete_take_files(root: Path, take: Take) -> None:
+    for path in [
+        project_path(root, take.media_path),
+        project_path(root, take.sidecar_path),
+        project_path(root, take.thumbnail_path),
+    ]:
+        if path and path.exists() and path.is_file():
+            path.unlink()
 
 
 def move_take_to_bin(db: Database, root: Path, take: Take) -> None:
