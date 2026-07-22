@@ -150,6 +150,26 @@ class ImportMetadataDialog(QDialog):
         return self.model.text().strip(), self.prompt.toPlainText().strip()
 
 
+class PromptDialog(QDialog):
+    def __init__(self, prompt: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Take Prompt")
+        self.resize(720, 520)
+
+        self.prompt = QTextEdit()
+        self.prompt.setPlainText(prompt)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.prompt)
+        buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def value(self) -> str:
+        return self.prompt.toPlainText().strip()
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -224,11 +244,10 @@ class MainWindow(QMainWindow):
 
         self.model = QLineEdit()
         self.model.setPlaceholderText("Model used")
-        self.prompt = QTextEdit()
-        self.prompt.setObjectName("promptEdit")
-        self.prompt.setPlaceholderText("Prompt used")
-        self.prompt.setFixedHeight(92)
-        self.save_generation_button = QPushButton("Save Generation Info")
+        self.prompt_button = QPushButton("View / Edit Prompt")
+        self.prompt_button.setObjectName("secondaryButton")
+        self.prompt_button.clicked.connect(self.edit_current_prompt)
+        self.save_generation_button = QPushButton("Save Model")
         self.save_generation_button.setObjectName("primaryButton")
         self.save_generation_button.clicked.connect(self.save_generation_info)
 
@@ -355,7 +374,7 @@ class MainWindow(QMainWindow):
         form.addRow("Stars", self.stars)
         form.addRow("Status", self.status)
         form.addRow("Model", self.model)
-        form.addRow("Prompt", self.prompt)
+        form.addRow("Prompt", self.prompt_button)
         details_layout.addLayout(form)
         details_layout.addWidget(self.save_generation_button)
 
@@ -656,9 +675,6 @@ class MainWindow(QMainWindow):
             QTextEdit {
                 min-height: 48px;
             }
-            QTextEdit#promptEdit {
-                min-height: 82px;
-            }
             QListWidget#commentList {
                 min-height: 170px;
             }
@@ -784,7 +800,7 @@ class MainWindow(QMainWindow):
             self.stars,
             self.status,
             self.model,
-            self.prompt,
+            self.prompt_button,
             self.save_generation_button,
             self.comment_edit,
             self.add_comment_button,
@@ -1059,14 +1075,12 @@ class MainWindow(QMainWindow):
             self.stars.setValue(0)
             self.status.setCurrentText("New")
             self.model.clear()
-            self.prompt.clear()
             self._building_ui = False
             return
         self.title_label.setText(Path(take.media_path).name)
         self.stars.setValue(take.stars)
         self.status.setCurrentText(take.status)
         self.model.setText(take.model)
-        self.prompt.setPlainText(take.prompt)
         media = project_path(self.project_root_path(), take.media_path)
         if take.media_type in {"video", "audio"} and media and media.exists():
             self.preview_stack.setCurrentWidget(self.video_widget)
@@ -1250,9 +1264,23 @@ class MainWindow(QMainWindow):
         self.db.update_take_generation(
             self.current_take_id,
             self.model.text().strip(),
-            self.prompt.toPlainText().strip(),
+            self.db.take(self.current_take_id).prompt,
         )
         self.refresh_takes()
+
+    def edit_current_prompt(self) -> None:
+        take = self.current_take()
+        if not self.db or not take:
+            return
+        dialog = PromptDialog(take.prompt, self)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        self.db.update_take_generation(
+            take.id,
+            self.model.text().strip(),
+            dialog.value(),
+        )
+        self.refresh_take_detail()
 
     def add_comment(self) -> None:
         body = self.comment_edit.toPlainText().strip()
