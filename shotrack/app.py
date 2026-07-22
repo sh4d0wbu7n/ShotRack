@@ -380,6 +380,9 @@ class MainWindow(QMainWindow):
         self.canvas_add_button = QPushButton("Add Selected")
         self.canvas_add_button.setObjectName("primaryButton")
         self.canvas_add_button.clicked.connect(self.add_selected_project_asset_to_canvas)
+        self.canvas_refit_button = QPushButton("Refit Canvas")
+        self.canvas_refit_button.setObjectName("secondaryButton")
+        self.canvas_refit_button.clicked.connect(self.refit_canvas)
 
         self.build_layout()
         self.build_actions()
@@ -497,6 +500,7 @@ class MainWindow(QMainWindow):
         canvas_library_layout.addWidget(self.section_label("Project Assets"))
         canvas_library_layout.addWidget(self.canvas_asset_list, 1)
         canvas_library_layout.addWidget(self.canvas_add_button)
+        canvas_library_layout.addWidget(self.canvas_refit_button)
 
         canvas_workspace_layout.addWidget(canvas_library)
         canvas_workspace_layout.addWidget(self.canvas_view, 1)
@@ -862,6 +866,7 @@ class MainWindow(QMainWindow):
         self.canvas_add_button.setEnabled(
             has_project and self.canvas_asset_list.currentItem() is not None
         )
+        self.canvas_refit_button.setEnabled(has_project)
         take = self.current_take()
         self.open_sidecar_button.setEnabled(bool(take and (take.sidecar_path or take.media_type == "image")))
         can_play = bool(take and take.media_type in {"video", "audio"})
@@ -1556,6 +1561,8 @@ class MainWindow(QMainWindow):
         item.setPos(placement.x, placement.y)
         item.setData(0, take.id)
         item.setData(1, placement.id)
+        item.setData(2, placement.width)
+        item.setData(3, placement.height)
         item.setFlag(QGraphicsItem.ItemIsMovable, True)
         item.setFlag(QGraphicsItem.ItemIsSelectable, True)
         item.setFlag(QGraphicsItem.ItemSendsGeometryChanges, True)
@@ -1573,14 +1580,24 @@ class MainWindow(QMainWindow):
             take_id = item.data(0)
             if placement_id is None or take_id is None or item.parentItem() is not None:
                 continue
-            rect = item.boundingRect()
             self.db.update_canvas_item(
                 int(placement_id),
                 item.pos().x(),
                 item.pos().y(),
-                rect.width(),
-                rect.height(),
+                float(item.data(2)),
+                float(item.data(3)),
             )
+
+    def refit_canvas(self) -> None:
+        self.canvas_view.resetTransform()
+        bounds = self.canvas_scene.itemsBoundingRect()
+        if bounds.isEmpty():
+            self.canvas_scene.setSceneRect(-3000, -3000, 6000, 6000)
+            self.canvas_view.centerOn(0, 0)
+            return
+        bounds = bounds.adjusted(-80, -80, 80, 80)
+        self.canvas_scene.setSceneRect(bounds)
+        self.canvas_view.fitInView(bounds, Qt.KeepAspectRatio)
 
     def delete_selected_canvas_items(self) -> None:
         if not self.db:
