@@ -269,6 +269,20 @@ class Database:
         ).fetchall()
         return [Take(**dict(row)) for row in rows]
 
+    def project_takes(self, include_binned: bool = False) -> list[Take]:
+        binned_clause = "" if include_binned else "WHERE takes.is_binned = 0"
+        rows = self.conn.execute(
+            f"""
+            SELECT takes.*
+            FROM takes
+            JOIN shots ON shots.id = takes.shot_id
+            JOIN scenes ON scenes.id = shots.scene_id
+            {binned_clause}
+            ORDER BY scenes.number, shots.number, takes.take_number
+            """
+        ).fetchall()
+        return [Take(**dict(row)) for row in rows]
+
     def take(self, take_id: int) -> Take:
         row = self.conn.execute("SELECT * FROM takes WHERE id = ?", (take_id,)).fetchone()
         return Take(**dict(row))

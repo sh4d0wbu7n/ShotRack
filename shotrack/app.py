@@ -120,6 +120,30 @@ class TakeList(QListWidget):
         drag.exec(Qt.CopyAction)
 
 
+class CanvasAssetList(QListWidget):
+    def __init__(self, window: "MainWindow") -> None:
+        super().__init__()
+        self.window = window
+        self.setObjectName("canvasAssetList")
+        self.setDragEnabled(True)
+        self.setDefaultDropAction(Qt.CopyAction)
+        self.setViewMode(QListWidget.IconMode)
+        self.setIconSize(QSize(120, 68))
+        self.setResizeMode(QListWidget.Adjust)
+        self.setMovement(QListWidget.Static)
+        self.setSpacing(6)
+
+    def startDrag(self, supported_actions) -> None:  # type: ignore[no-untyped-def]
+        take_ids = [str(item.data(Qt.UserRole)) for item in self.selectedItems()]
+        if not take_ids:
+            return
+        mime_data = QMimeData()
+        mime_data.setData(TAKE_MIME_TYPE, ",".join(take_ids).encode("utf-8"))
+        drag = QDrag(self)
+        drag.setMimeData(mime_data)
+        drag.exec(Qt.CopyAction)
+
+
 class ImportMetadataDialog(QDialog):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -348,6 +372,14 @@ class MainWindow(QMainWindow):
         self.canvas_view = CanvasView(self)
         self.canvas_view.setObjectName("overviewCanvas")
         self.canvas_scene = self.canvas_view.scene()
+        self.canvas_asset_list = CanvasAssetList(self)
+        self.canvas_asset_list.itemSelectionChanged.connect(self.update_enabled_state)
+        self.canvas_asset_list.itemDoubleClicked.connect(
+            lambda item: self.add_take_to_canvas_centered(int(item.data(Qt.UserRole)))
+        )
+        self.canvas_add_button = QPushButton("Add Selected")
+        self.canvas_add_button.setObjectName("primaryButton")
+        self.canvas_add_button.clicked.connect(self.add_selected_project_asset_to_canvas)
 
         self.build_layout()
         self.build_actions()
@@ -355,6 +387,14 @@ class MainWindow(QMainWindow):
         self.update_enabled_state()
 
     def build_layout(self) -> None:
+        self.workspace_tabs = QTabWidget()
+        self.workspace_tabs.setObjectName("workspaceTabs")
+
+        assets_workspace = QWidget()
+        assets_layout = QVBoxLayout(assets_workspace)
+        assets_layout.setContentsMargins(0, 0, 0, 0)
+        assets_layout.setSpacing(0)
+
         splitter = QSplitter()
         splitter.setObjectName("mainSplitter")
         splitter.addWidget(self.tree)
@@ -436,15 +476,32 @@ class MainWindow(QMainWindow):
         bin_layout.addWidget(self.restore_button)
         self.detail_tabs.addTab(bin_tab, "Bin")
 
-        canvas_tab = QWidget()
-        canvas_layout = QVBoxLayout(canvas_tab)
-        canvas_layout.setContentsMargins(0, 0, 0, 0)
-        canvas_layout.addWidget(self.canvas_view)
-        self.detail_tabs.addTab(canvas_tab, "Canvas")
-
         splitter.addWidget(self.detail_tabs)
         splitter.setSizes([280, 610, 430])
-        self.setCentralWidget(splitter)
+        assets_layout.addWidget(splitter)
+        self.workspace_tabs.addTab(assets_workspace, "Assets")
+
+        canvas_workspace = QWidget()
+        canvas_workspace.setObjectName("canvasWorkspace")
+        canvas_workspace_layout = QHBoxLayout(canvas_workspace)
+        canvas_workspace_layout.setContentsMargins(12, 12, 12, 12)
+        canvas_workspace_layout.setSpacing(12)
+
+        canvas_library = QWidget()
+        canvas_library.setObjectName("canvasLibrary")
+        canvas_library.setMaximumWidth(300)
+        canvas_library.setMinimumWidth(220)
+        canvas_library_layout = QVBoxLayout(canvas_library)
+        canvas_library_layout.setContentsMargins(4, 4, 4, 4)
+        canvas_library_layout.setSpacing(8)
+        canvas_library_layout.addWidget(self.section_label("Project Assets"))
+        canvas_library_layout.addWidget(self.canvas_asset_list, 1)
+        canvas_library_layout.addWidget(self.canvas_add_button)
+
+        canvas_workspace_layout.addWidget(canvas_library)
+        canvas_workspace_layout.addWidget(self.canvas_view, 1)
+        self.workspace_tabs.addTab(canvas_workspace, "Canvas")
+        self.setCentralWidget(self.workspace_tabs)
 
     def build_actions(self) -> None:
         toolbar = QToolBar("Main")
@@ -556,6 +613,7 @@ class MainWindow(QMainWindow):
             }
             QTreeWidget#sceneTree,
             QListWidget#takeGrid,
+            QListWidget#canvasAssetList,
             QListWidget#binList,
             QListWidget,
             QGraphicsView#overviewCanvas {
@@ -584,6 +642,12 @@ class MainWindow(QMainWindow):
                 border: 1px solid #383a32;
                 padding: 8px;
                 margin: 4px;
+            }
+            QListWidget#canvasAssetList::item {
+                background: #282a24;
+                border: 1px solid #383a32;
+                padding: 6px;
+                margin: 3px;
             }
             QTreeWidget::item:selected,
             QListWidget::item:selected {
@@ -794,6 +858,10 @@ class MainWindow(QMainWindow):
         ]:
             widget.setEnabled(has_take)
         self.canvas_view.setEnabled(has_project)
+        self.canvas_asset_list.setEnabled(has_project)
+        self.canvas_add_button.setEnabled(
+            has_project and self.canvas_asset_list.currentItem() is not None
+        )
         take = self.current_take()
         self.open_sidecar_button.setEnabled(bool(take and (take.sidecar_path or take.media_type == "image")))
         can_play = bool(take and take.media_type in {"video", "audio"})
@@ -839,6 +907,7 @@ class MainWindow(QMainWindow):
         self.refresh_tree()
         self.refresh_takes()
         self.refresh_bin()
+        self.refresh_canvas_assets()
         self.refresh_canvas()
         self.update_enabled_state()
 
@@ -914,6 +983,30 @@ class MainWindow(QMainWindow):
             item = QListWidgetItem(Path(take.media_path).name)
             item.setData(Qt.UserRole, take.id)
             self.bin_list.addItem(item)
+
+    def refresh_canvas_assets(self) -> None:
+        selected_id = None
+        current = self.canvas_asset_list.currentItem()
+        if current:
+            selected_id = current.data(Qt.UserRole)
+        self.canvas_asset_list.clear()
+        if not self.db:
+            return
+        for take in self.db.project_takes():
+            shot = self.db.shot(take.shot_id)
+            scene = self.db.scene(shot.scene_id)
+            item = QListWidgetItem(
+                f"SC_{scene.number:03d} / SH_{shot.number:04d}\n"
+                f"TK_{take.take_number:03d}  {asset_type_label(take)}"
+            )
+            item.setData(Qt.UserRole, take.id)
+            thumb = project_path(self.project_root_path(), take.thumbnail_path)
+            if thumb and thumb.exists():
+                item.setIcon(make_take_icon(thumb, False, False, take.media_type))
+            self.canvas_asset_list.addItem(item)
+            if take.id == selected_id:
+                self.canvas_asset_list.setCurrentItem(item)
+        self.canvas_add_button.setEnabled(self.canvas_asset_list.currentItem() is not None)
 
     def on_tree_selection(self) -> None:
         item = self.tree.currentItem()
@@ -1163,6 +1256,7 @@ class MainWindow(QMainWindow):
             )
             self.current_take_id = take.id
             self.refresh_takes()
+            self.refresh_canvas_assets()
         except Exception as exc:
             QMessageBox.critical(self, "Import Failed", str(exc))
 
@@ -1414,18 +1508,29 @@ class MainWindow(QMainWindow):
 
     def add_current_take_to_canvas(self) -> None:
         take = self.current_take()
-        if not self.db or not take:
+        if not take:
             return
-        existing = self.db.canvas_item_for_take(take.id)
+        self.add_take_to_canvas_centered(take.id)
+
+    def add_selected_project_asset_to_canvas(self) -> None:
+        item = self.canvas_asset_list.currentItem()
+        if not item:
+            return
+        self.add_take_to_canvas_centered(int(item.data(Qt.UserRole)))
+
+    def add_take_to_canvas_centered(self, take_id: int) -> None:
+        if not self.db:
+            return
+        self.workspace_tabs.setCurrentIndex(1)
+        QApplication.processEvents()
+        existing = self.db.canvas_item_for_take(take_id)
         if existing:
-            self.detail_tabs.setCurrentWidget(self.canvas_view.parentWidget())
             self.focus_canvas_item(existing.id)
             return
         center = self.canvas_view.mapToScene(self.canvas_view.viewport().rect().center())
         offset = len(self.db.canvas_items()) * 24
-        placement = self.db.add_canvas_item(take.id, center.x() + offset, center.y() + offset)
+        placement = self.db.add_canvas_item(take_id, center.x() + offset, center.y() + offset)
         self.refresh_canvas()
-        self.detail_tabs.setCurrentWidget(self.canvas_view.parentWidget())
         self.focus_canvas_item(placement.id)
 
     def focus_canvas_item(self, placement_id: int) -> None:
