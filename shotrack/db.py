@@ -127,6 +127,11 @@ class Database:
                 height REAL NOT NULL DEFAULT 135,
                 UNIQUE(take_id)
             );
+
+            CREATE TABLE IF NOT EXISTS pureref_items (
+                take_id INTEGER PRIMARY KEY REFERENCES takes(id) ON DELETE CASCADE,
+                added_at TEXT NOT NULL
+            );
             """
         )
         self.ensure_column("scenes", "description", "TEXT NOT NULL DEFAULT ''")
@@ -365,6 +370,22 @@ class Database:
             "INSERT INTO comments(take_id, body, created_at) VALUES (?, ?, ?)",
             (take_id, body, now_iso()),
         )
+        self.conn.commit()
+
+    def pureref_item_ids(self) -> set[int]:
+        rows = self.conn.execute("SELECT take_id FROM pureref_items").fetchall()
+        return {int(row["take_id"]) for row in rows}
+
+    def mark_pureref_items(self, take_ids: Iterable[int]) -> None:
+        timestamp = now_iso()
+        self.conn.executemany(
+            "INSERT OR REPLACE INTO pureref_items(take_id, added_at) VALUES (?, ?)",
+            [(take_id, timestamp) for take_id in take_ids],
+        )
+        self.conn.commit()
+
+    def clear_pureref_items(self) -> None:
+        self.conn.execute("DELETE FROM pureref_items")
         self.conn.commit()
 
     def canvas_items(self) -> list[CanvasPlacement]:

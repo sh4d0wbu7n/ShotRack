@@ -5,7 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QMimeData, QUrl, Qt, QSize
+from PySide6.QtCore import QMimeData, QTimer, QUrl, Qt, QSize
 from PySide6.QtGui import QAction, QBrush, QColor, QDrag, QIcon, QKeySequence, QPainter, QPen, QPixmap
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
@@ -16,11 +16,6 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFileDialog,
     QFormLayout,
-    QGraphicsItem,
-    QGraphicsPixmapItem,
-    QGraphicsScene,
-    QGraphicsTextItem,
-    QGraphicsView,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -44,7 +39,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .db import CanvasPlacement, Database, STATUSES, Take
+from .db import Database, STATUSES, Take
 from .media import (
     delete_scene_files_and_record,
     delete_shot_files_and_record,
@@ -61,7 +56,8 @@ from .settings import load_last_project, save_last_project
 from .utils import project_path, scene_code, shot_code, snake_case
 
 
-TAKE_MIME_TYPE = "application/x-shotrack-take-id"
+PURE_REF_EXECUTABLE = Path(r"C:\Program Files\PureRef\PureRef.exe")
+PURE_REF_BOARD_NAME = "ShotRack Canvas.pur"
 
 
 class TakeList(QListWidget):
@@ -99,50 +95,32 @@ class TakeList(QListWidget):
 
     def startDrag(self, supported_actions) -> None:  # type: ignore[no-untyped-def]
         urls = []
-        take_ids = []
         for item in self.selectedItems():
             take_id = item.data(Qt.UserRole)
             take = self.window.db.take(take_id) if self.window.db else None
             if take:
-                take_ids.append(str(take.id))
                 media = project_path(self.window.project_root_path(), take.media_path)
                 if media and media.exists():
                     urls.append(QUrl.fromLocalFile(str(media)))
-        if not urls and not take_ids:
+        if not urls:
             return
         mime_data = QMimeData()
-        if urls:
-            mime_data.setUrls(urls)
-        if take_ids:
-            mime_data.setData(TAKE_MIME_TYPE, ",".join(take_ids).encode("utf-8"))
+        mime_data.setUrls(urls)
         drag = QDrag(self)
         drag.setMimeData(mime_data)
         drag.exec(Qt.CopyAction)
 
 
-class CanvasAssetList(QListWidget):
+class PureRefAssetList(QListWidget):
     def __init__(self, window: "MainWindow") -> None:
         super().__init__()
         self.window = window
-        self.setObjectName("canvasAssetList")
-        self.setDragEnabled(True)
-        self.setDefaultDropAction(Qt.CopyAction)
+        self.setObjectName("pureRefAssetList")
         self.setViewMode(QListWidget.IconMode)
         self.setIconSize(QSize(120, 68))
         self.setResizeMode(QListWidget.Adjust)
         self.setMovement(QListWidget.Static)
         self.setSpacing(6)
-
-    def startDrag(self, supported_actions) -> None:  # type: ignore[no-untyped-def]
-        take_ids = [str(item.data(Qt.UserRole)) for item in self.selectedItems()]
-        if not take_ids:
-            return
-        mime_data = QMimeData()
-        mime_data.setData(TAKE_MIME_TYPE, ",".join(take_ids).encode("utf-8"))
-        drag = QDrag(self)
-        drag.setMimeData(mime_data)
-        drag.exec(Qt.CopyAction)
-
 
 class ImportMetadataDialog(QDialog):
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -170,65 +148,6 @@ class ImportMetadataDialog(QDialog):
 
     def values(self) -> tuple[str, str]:
         return self.model.text().strip(), self.prompt.toPlainText().strip()
-
-
-class CanvasView(QGraphicsView):
-    def __init__(self, window: "MainWindow") -> None:
-        super().__init__()
-        self.window = window
-        self.setAcceptDrops(True)
-        self.setDragMode(QGraphicsView.RubberBandDrag)
-        self.setRenderHint(QPainter.Antialiasing)
-        self.setScene(QGraphicsScene(self))
-        self.scene().setSceneRect(-3000, -3000, 6000, 6000)
-
-    def dragEnterEvent(self, event) -> None:  # type: ignore[no-untyped-def]
-        if event.mimeData().hasFormat(TAKE_MIME_TYPE):
-            event.acceptProposedAction()
-        else:
-            super().dragEnterEvent(event)
-
-    def dragMoveEvent(self, event) -> None:  # type: ignore[no-untyped-def]
-        if event.mimeData().hasFormat(TAKE_MIME_TYPE):
-            event.acceptProposedAction()
-        else:
-            super().dragMoveEvent(event)
-
-    def dropEvent(self, event) -> None:  # type: ignore[no-untyped-def]
-        if not event.mimeData().hasFormat(TAKE_MIME_TYPE):
-            super().dropEvent(event)
-            return
-        raw_ids = bytes(event.mimeData().data(TAKE_MIME_TYPE)).decode("utf-8")
-        scene_pos = self.mapToScene(event.position().toPoint())
-        for index, raw_id in enumerate(raw_ids.split(",")):
-            if raw_id.strip().isdigit():
-                self.window.add_take_to_canvas(
-                    int(raw_id),
-                    scene_pos.x() + index * 28,
-                    scene_pos.y() + index * 28,
-                )
-        event.acceptProposedAction()
-
-    def mouseReleaseEvent(self, event) -> None:  # type: ignore[no-untyped-def]
-        super().mouseReleaseEvent(event)
-        self.window.save_canvas_layout()
-
-    def mouseDoubleClickEvent(self, event) -> None:  # type: ignore[no-untyped-def]
-        item = self.itemAt(event.position().toPoint())
-        while item and item.data(0) is None and item.parentItem():
-            item = item.parentItem()
-        if item and item.data(0) is not None:
-            self.window.open_take_media(int(item.data(0)))
-            event.accept()
-            return
-        super().mouseDoubleClickEvent(event)
-
-    def keyPressEvent(self, event) -> None:  # type: ignore[no-untyped-def]
-        if event.key() in {Qt.Key_Delete, Qt.Key_Backspace}:
-            self.window.delete_selected_canvas_items()
-            event.accept()
-            return
-        super().keyPressEvent(event)
 
 
 class MainWindow(QMainWindow):
@@ -331,9 +250,9 @@ class MainWindow(QMainWindow):
         self.open_sidecar_button = QPushButton("Open PNG/Image")
         self.open_sidecar_button.setObjectName("secondaryButton")
         self.open_sidecar_button.clicked.connect(self.open_sidecar)
-        self.add_canvas_button = QPushButton("Add to Canvas")
-        self.add_canvas_button.setObjectName("primaryButton")
-        self.add_canvas_button.clicked.connect(self.add_current_take_to_canvas)
+        self.add_pureref_button = QPushButton("Add to PureRef")
+        self.add_pureref_button.setObjectName("primaryButton")
+        self.add_pureref_button.clicked.connect(self.add_current_take_to_pureref)
         self.bin_button = QPushButton("Move to Bin")
         self.bin_button.setObjectName("secondaryButton")
         self.bin_button.clicked.connect(self.bin_current_take)
@@ -369,20 +288,24 @@ class MainWindow(QMainWindow):
         self.restore_button.setObjectName("primaryButton")
         self.restore_button.clicked.connect(self.restore_selected_take)
 
-        self.canvas_view = CanvasView(self)
-        self.canvas_view.setObjectName("overviewCanvas")
-        self.canvas_scene = self.canvas_view.scene()
-        self.canvas_asset_list = CanvasAssetList(self)
-        self.canvas_asset_list.itemSelectionChanged.connect(self.update_enabled_state)
-        self.canvas_asset_list.itemDoubleClicked.connect(
-            lambda item: self.add_take_to_canvas_centered(int(item.data(Qt.UserRole)))
+        self.pureref_asset_list = PureRefAssetList(self)
+        self.pureref_asset_list.itemSelectionChanged.connect(self.update_enabled_state)
+        self.pureref_asset_list.itemDoubleClicked.connect(
+            lambda item: self.add_take_to_pureref(int(item.data(Qt.UserRole)))
         )
-        self.canvas_add_button = QPushButton("Add Selected")
-        self.canvas_add_button.setObjectName("primaryButton")
-        self.canvas_add_button.clicked.connect(self.add_selected_project_asset_to_canvas)
-        self.canvas_refit_button = QPushButton("Refit Canvas")
-        self.canvas_refit_button.setObjectName("secondaryButton")
-        self.canvas_refit_button.clicked.connect(self.refit_canvas)
+        self.pureref_open_button = QPushButton("Open Project Board")
+        self.pureref_open_button.setObjectName("primaryButton")
+        self.pureref_open_button.clicked.connect(self.open_pureref_board)
+        self.pureref_add_button = QPushButton("Add Selected")
+        self.pureref_add_button.setObjectName("secondaryButton")
+        self.pureref_add_button.clicked.connect(self.add_selected_asset_to_pureref)
+        self.pureref_sync_button = QPushButton("Sync New Assets")
+        self.pureref_sync_button.setObjectName("secondaryButton")
+        self.pureref_sync_button.clicked.connect(self.sync_new_assets_to_pureref)
+        self.pureref_status = QLabel("No project open.")
+        self.pureref_status.setObjectName("pureRefStatus")
+        self.pureref_status.setWordWrap(True)
+        self.pureref_status.setTextInteractionFlags(Qt.TextSelectableByMouse)
 
         self.build_layout()
         self.build_actions()
@@ -443,7 +366,7 @@ class MainWindow(QMainWindow):
         button_row.setSpacing(8)
         button_row.addWidget(self.open_media_button)
         button_row.addWidget(self.open_sidecar_button)
-        button_row.addWidget(self.add_canvas_button)
+        button_row.addWidget(self.add_pureref_button)
         details_layout.addLayout(button_row)
         manage_row = QHBoxLayout()
         manage_row.setSpacing(8)
@@ -484,27 +407,38 @@ class MainWindow(QMainWindow):
         assets_layout.addWidget(splitter)
         self.workspace_tabs.addTab(assets_workspace, "Assets")
 
-        canvas_workspace = QWidget()
-        canvas_workspace.setObjectName("canvasWorkspace")
-        canvas_workspace_layout = QHBoxLayout(canvas_workspace)
-        canvas_workspace_layout.setContentsMargins(12, 12, 12, 12)
-        canvas_workspace_layout.setSpacing(12)
+        pureref_workspace = QWidget()
+        pureref_workspace.setObjectName("pureRefWorkspace")
+        pureref_workspace_layout = QHBoxLayout(pureref_workspace)
+        pureref_workspace_layout.setContentsMargins(16, 16, 16, 16)
+        pureref_workspace_layout.setSpacing(20)
 
-        canvas_library = QWidget()
-        canvas_library.setObjectName("canvasLibrary")
-        canvas_library.setMaximumWidth(300)
-        canvas_library.setMinimumWidth(220)
-        canvas_library_layout = QVBoxLayout(canvas_library)
-        canvas_library_layout.setContentsMargins(4, 4, 4, 4)
-        canvas_library_layout.setSpacing(8)
-        canvas_library_layout.addWidget(self.section_label("Project Assets"))
-        canvas_library_layout.addWidget(self.canvas_asset_list, 1)
-        canvas_library_layout.addWidget(self.canvas_add_button)
-        canvas_library_layout.addWidget(self.canvas_refit_button)
+        pureref_library = QWidget()
+        pureref_library.setObjectName("pureRefLibrary")
+        pureref_library.setMinimumWidth(360)
+        pureref_library_layout = QVBoxLayout(pureref_library)
+        pureref_library_layout.setContentsMargins(0, 0, 0, 0)
+        pureref_library_layout.setSpacing(10)
+        pureref_library_layout.addWidget(self.section_label("Project Assets"))
+        pureref_library_layout.addWidget(self.pureref_asset_list, 1)
+        pureref_library_layout.addWidget(self.pureref_add_button)
 
-        canvas_workspace_layout.addWidget(canvas_library)
-        canvas_workspace_layout.addWidget(self.canvas_view, 1)
-        self.workspace_tabs.addTab(canvas_workspace, "Canvas")
+        pureref_controls = QWidget()
+        pureref_controls.setObjectName("pureRefControls")
+        pureref_controls_layout = QVBoxLayout(pureref_controls)
+        pureref_controls_layout.setContentsMargins(16, 8, 16, 8)
+        pureref_controls_layout.setSpacing(12)
+        pureref_title = QLabel("PureRef Project Board")
+        pureref_title.setObjectName("assetTitle")
+        pureref_controls_layout.addWidget(pureref_title)
+        pureref_controls_layout.addWidget(self.pureref_status)
+        pureref_controls_layout.addWidget(self.pureref_open_button)
+        pureref_controls_layout.addWidget(self.pureref_sync_button)
+        pureref_controls_layout.addStretch(1)
+
+        pureref_workspace_layout.addWidget(pureref_library, 2)
+        pureref_workspace_layout.addWidget(pureref_controls, 1)
+        self.workspace_tabs.addTab(pureref_workspace, "PureRef Board")
         self.setCentralWidget(self.workspace_tabs)
 
     def build_actions(self) -> None:
@@ -617,10 +551,9 @@ class MainWindow(QMainWindow):
             }
             QTreeWidget#sceneTree,
             QListWidget#takeGrid,
-            QListWidget#canvasAssetList,
+            QListWidget#pureRefAssetList,
             QListWidget#binList,
-            QListWidget,
-            QGraphicsView#overviewCanvas {
+            QListWidget {
                 background: #20211d;
                 color: #f1f0e8;
                 border: 1px solid #383a32;
@@ -647,7 +580,7 @@ class MainWindow(QMainWindow):
                 padding: 8px;
                 margin: 4px;
             }
-            QListWidget#canvasAssetList::item {
+            QListWidget#pureRefAssetList::item {
                 background: #282a24;
                 border: 1px solid #383a32;
                 padding: 6px;
@@ -678,6 +611,13 @@ class MainWindow(QMainWindow):
                 font-size: 11pt;
                 font-weight: 700;
                 padding: 2px 0 6px 0;
+            }
+            QLabel#pureRefStatus {
+                color: #c9c7ba;
+                background: #20211d;
+                border: 1px solid #383a32;
+                border-radius: 6px;
+                padding: 12px;
             }
             QLabel#previewSurface,
             QVideoWidget#previewSurface {
@@ -853,7 +793,7 @@ class MainWindow(QMainWindow):
             self.comment_edit,
             self.add_comment_button,
             self.open_media_button,
-            self.add_canvas_button,
+            self.add_pureref_button,
             self.bin_button,
             self.delete_take_button,
             self.play_button,
@@ -861,12 +801,12 @@ class MainWindow(QMainWindow):
             self.position_slider,
         ]:
             widget.setEnabled(has_take)
-        self.canvas_view.setEnabled(has_project)
-        self.canvas_asset_list.setEnabled(has_project)
-        self.canvas_add_button.setEnabled(
-            has_project and self.canvas_asset_list.currentItem() is not None
+        self.pureref_asset_list.setEnabled(has_project)
+        self.pureref_add_button.setEnabled(
+            has_project and self.pureref_asset_list.currentItem() is not None
         )
-        self.canvas_refit_button.setEnabled(has_project)
+        self.pureref_open_button.setEnabled(has_project)
+        self.pureref_sync_button.setEnabled(has_project)
         take = self.current_take()
         self.open_sidecar_button.setEnabled(bool(take and (take.sidecar_path or take.media_type == "image")))
         can_play = bool(take and take.media_type in {"video", "audio"})
@@ -912,8 +852,8 @@ class MainWindow(QMainWindow):
         self.refresh_tree()
         self.refresh_takes()
         self.refresh_bin()
-        self.refresh_canvas_assets()
-        self.refresh_canvas()
+        self.refresh_pureref_assets()
+        self.refresh_pureref_status()
         self.update_enabled_state()
 
     def refresh_tree(self) -> None:
@@ -989,12 +929,12 @@ class MainWindow(QMainWindow):
             item.setData(Qt.UserRole, take.id)
             self.bin_list.addItem(item)
 
-    def refresh_canvas_assets(self) -> None:
+    def refresh_pureref_assets(self) -> None:
         selected_id = None
-        current = self.canvas_asset_list.currentItem()
+        current = self.pureref_asset_list.currentItem()
         if current:
             selected_id = current.data(Qt.UserRole)
-        self.canvas_asset_list.clear()
+        self.pureref_asset_list.clear()
         if not self.db:
             return
         for take in self.db.project_takes():
@@ -1008,10 +948,10 @@ class MainWindow(QMainWindow):
             thumb = project_path(self.project_root_path(), take.thumbnail_path)
             if thumb and thumb.exists():
                 item.setIcon(make_take_icon(thumb, False, False, take.media_type))
-            self.canvas_asset_list.addItem(item)
+            self.pureref_asset_list.addItem(item)
             if take.id == selected_id:
-                self.canvas_asset_list.setCurrentItem(item)
-        self.canvas_add_button.setEnabled(self.canvas_asset_list.currentItem() is not None)
+                self.pureref_asset_list.setCurrentItem(item)
+        self.pureref_add_button.setEnabled(self.pureref_asset_list.currentItem() is not None)
 
     def on_tree_selection(self) -> None:
         item = self.tree.currentItem()
@@ -1078,8 +1018,8 @@ class MainWindow(QMainWindow):
         open_sidecar = menu.addAction("Open PNG/Image")
         open_sidecar.setEnabled(bool(take.sidecar_path or take.media_type == "image"))
         open_sidecar.triggered.connect(self.open_sidecar)
-        add_canvas = menu.addAction("Add to Canvas")
-        add_canvas.triggered.connect(self.add_current_take_to_canvas)
+        add_pureref = menu.addAction("Add to PureRef")
+        add_pureref.triggered.connect(self.add_current_take_to_pureref)
         menu.addSeparator()
         move_to_bin = menu.addAction("Move to Bin")
         move_to_bin.triggered.connect(self.bin_current_take)
@@ -1261,7 +1201,8 @@ class MainWindow(QMainWindow):
             )
             self.current_take_id = take.id
             self.refresh_takes()
-            self.refresh_canvas_assets()
+            self.refresh_pureref_assets()
+            self.refresh_pureref_status()
         except Exception as exc:
             QMessageBox.critical(self, "Import Failed", str(exc))
 
@@ -1492,125 +1433,128 @@ class MainWindow(QMainWindow):
             return None
         return mode
 
-    def refresh_canvas(self) -> None:
-        self.canvas_scene.clear()
+    def pure_ref_board_path(self) -> Path:
+        return self.project_root_path() / PURE_REF_BOARD_NAME
+
+    def pure_ref_source_path(self, take: Take) -> Path | None:
+        candidates = []
+        if take.media_type == "image":
+            candidates.append(take.media_path)
+        else:
+            candidates.extend([take.sidecar_path, take.thumbnail_path])
+        for relative_path in candidates:
+            path = project_path(self.project_root_path(), relative_path)
+            if path and path.exists():
+                return path.resolve()
+        return None
+
+    def refresh_pureref_status(self, message: str | None = None) -> None:
+        if not self.db or not self.project_root:
+            self.pureref_status.setText("No project open.")
+            return
+        board = self.pure_ref_board_path()
+        synced = len(self.db.pureref_item_ids())
+        state = "Ready" if board.exists() else "Not created yet"
+        text = f"{state}\n{board}\n{synced} project asset(s) sent"
+        if message:
+            text = f"{message}\n{text}"
+        self.pureref_status.setText(text)
+
+    def pure_ref_command(self, take_ids: list[int], load_board: bool) -> list[str]:
+        board = self.pure_ref_board_path().resolve()
+        paths = []
+        if self.db:
+            for take_id in take_ids:
+                source = self.pure_ref_source_path(self.db.take(take_id))
+                if source:
+                    paths.append(source)
+        command = [str(PURE_REF_EXECUTABLE)]
+        if load_board:
+            command.extend(["-c", f"load;{board}"])
+        else:
+            command.extend(["-c", "clearScene"])
+        for path in paths:
+            command.extend(["-c", f"load;{path}"])
+        if paths or not load_board:
+            command.extend(["-c", f"save;{board}"])
+        return command
+
+    def launch_pureref(self, take_ids: list[int], load_board: bool) -> None:
         if not self.db:
             return
-        for placement in self.db.canvas_items():
-            try:
-                take = self.db.take(placement.take_id)
-            except Exception:
-                continue
-            self.add_canvas_graphics_item(placement, take)
+        if not PURE_REF_EXECUTABLE.exists():
+            QMessageBox.critical(
+                self,
+                "PureRef Not Found",
+                f"PureRef was not found at:\n{PURE_REF_EXECUTABLE}",
+            )
+            return
+        valid_ids = [
+            take_id
+            for take_id in take_ids
+            if self.pure_ref_source_path(self.db.take(take_id)) is not None
+        ]
+        try:
+            subprocess.Popen(
+                self.pure_ref_command(valid_ids, load_board),
+                cwd=str(self.project_root_path()),
+                close_fds=True,
+            )
+        except OSError as exc:
+            QMessageBox.critical(self, "PureRef Launch Failed", str(exc))
+            return
+        if valid_ids:
+            self.db.mark_pureref_items(valid_ids)
+        self.refresh_pureref_status("PureRef launched")
+        QTimer.singleShot(1500, self.refresh_pureref_status)
 
-    def add_take_to_canvas(self, take_id: int, x: float, y: float) -> None:
+    def open_pureref_board(self) -> None:
         if not self.db:
             return
-        take = self.db.take(take_id)
-        placement = self.db.add_canvas_item(take.id, x, y)
-        self.refresh_canvas()
-        self.focus_canvas_item(placement.id)
+        board_exists = self.pure_ref_board_path().exists()
+        if board_exists:
+            self.launch_pureref([], True)
+            return
+        self.db.clear_pureref_items()
+        take_ids = [take.id for take in self.db.project_takes()]
+        self.launch_pureref(take_ids, False)
 
-    def add_current_take_to_canvas(self) -> None:
+    def sync_new_assets_to_pureref(self) -> None:
+        if not self.db:
+            return
+        if not self.pure_ref_board_path().exists():
+            self.open_pureref_board()
+            return
+        synced = self.db.pureref_item_ids()
+        take_ids = [take.id for take in self.db.project_takes() if take.id not in synced]
+        if not take_ids:
+            self.open_pureref_board()
+            return
+        self.launch_pureref(take_ids, True)
+
+    def add_current_take_to_pureref(self) -> None:
         take = self.current_take()
         if not take:
             return
-        self.add_take_to_canvas_centered(take.id)
+        self.add_take_to_pureref(take.id)
 
-    def add_selected_project_asset_to_canvas(self) -> None:
-        item = self.canvas_asset_list.currentItem()
+    def add_selected_asset_to_pureref(self) -> None:
+        item = self.pureref_asset_list.currentItem()
         if not item:
             return
-        self.add_take_to_canvas_centered(int(item.data(Qt.UserRole)))
+        self.add_take_to_pureref(int(item.data(Qt.UserRole)))
 
-    def add_take_to_canvas_centered(self, take_id: int) -> None:
+    def add_take_to_pureref(self, take_id: int) -> None:
         if not self.db:
             return
         self.workspace_tabs.setCurrentIndex(1)
-        QApplication.processEvents()
-        existing = self.db.canvas_item_for_take(take_id)
-        if existing:
-            self.focus_canvas_item(existing.id)
+        if not self.pure_ref_board_path().exists():
+            self.open_pureref_board()
             return
-        center = self.canvas_view.mapToScene(self.canvas_view.viewport().rect().center())
-        offset = len(self.db.canvas_items()) * 24
-        placement = self.db.add_canvas_item(take_id, center.x() + offset, center.y() + offset)
-        self.refresh_canvas()
-        self.focus_canvas_item(placement.id)
-
-    def focus_canvas_item(self, placement_id: int) -> None:
-        for item in self.canvas_scene.items():
-            if item.data(1) == placement_id:
-                self.canvas_scene.clearSelection()
-                item.setSelected(True)
-                self.canvas_view.centerOn(item)
-                break
-
-    def add_canvas_graphics_item(self, placement: CanvasPlacement, take: Take) -> None:
-        thumb = project_path(self.project_root_path(), take.thumbnail_path)
-        pixmap = QPixmap(str(thumb)) if thumb and thumb.exists() else QPixmap()
-        if pixmap.isNull():
-            pixmap = placeholder_pixmap(take.media_type)
-        pixmap = pixmap.scaled(
-            int(placement.width),
-            int(placement.height),
-            Qt.KeepAspectRatio,
-            Qt.SmoothTransformation,
-        )
-        item = QGraphicsPixmapItem(pixmap)
-        item.setPos(placement.x, placement.y)
-        item.setData(0, take.id)
-        item.setData(1, placement.id)
-        item.setData(2, placement.width)
-        item.setData(3, placement.height)
-        item.setFlag(QGraphicsItem.ItemIsMovable, True)
-        item.setFlag(QGraphicsItem.ItemIsSelectable, True)
-        item.setFlag(QGraphicsItem.ItemSendsGeometryChanges, True)
-        item.setToolTip(f"{Path(take.media_path).name}\nDouble-click to open")
-        label = QGraphicsTextItem(f"TK_{take.take_number:03d}  {asset_type_label(take)}", item)
-        label.setDefaultTextColor(QColor("#f6f4ea"))
-        label.setPos(0, pixmap.height() + 4)
-        self.canvas_scene.addItem(item)
-
-    def save_canvas_layout(self) -> None:
-        if not self.db:
+        if take_id in self.db.pureref_item_ids():
+            self.open_pureref_board()
             return
-        for item in self.canvas_scene.items():
-            placement_id = item.data(1)
-            take_id = item.data(0)
-            if placement_id is None or take_id is None or item.parentItem() is not None:
-                continue
-            self.db.update_canvas_item(
-                int(placement_id),
-                item.pos().x(),
-                item.pos().y(),
-                float(item.data(2)),
-                float(item.data(3)),
-            )
-
-    def refit_canvas(self) -> None:
-        self.canvas_view.resetTransform()
-        bounds = self.canvas_scene.itemsBoundingRect()
-        if bounds.isEmpty():
-            self.canvas_scene.setSceneRect(-3000, -3000, 6000, 6000)
-            self.canvas_view.centerOn(0, 0)
-            return
-        bounds = bounds.adjusted(-80, -80, 80, 80)
-        self.canvas_scene.setSceneRect(bounds)
-        self.canvas_view.fitInView(bounds, Qt.KeepAspectRatio)
-
-    def delete_selected_canvas_items(self) -> None:
-        if not self.db:
-            return
-        deleted = False
-        for item in list(self.canvas_scene.selectedItems()):
-            placement_id = item.data(1)
-            if placement_id is None:
-                continue
-            self.db.delete_canvas_item(int(placement_id))
-            deleted = True
-        if deleted:
-            self.refresh_canvas()
+        self.launch_pureref([take_id], True)
 
     def current_take(self) -> Take | None:
         if not self.db or not self.current_take_id:
