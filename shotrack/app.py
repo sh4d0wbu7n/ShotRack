@@ -299,9 +299,6 @@ class MainWindow(QMainWindow):
         self.pureref_add_button = QPushButton("Add Selected")
         self.pureref_add_button.setObjectName("secondaryButton")
         self.pureref_add_button.clicked.connect(self.add_selected_asset_to_pureref)
-        self.pureref_sync_button = QPushButton("Sync New Assets")
-        self.pureref_sync_button.setObjectName("secondaryButton")
-        self.pureref_sync_button.clicked.connect(self.sync_new_assets_to_pureref)
         self.pureref_status = QLabel("No project open.")
         self.pureref_status.setObjectName("pureRefStatus")
         self.pureref_status.setWordWrap(True)
@@ -433,7 +430,6 @@ class MainWindow(QMainWindow):
         pureref_controls_layout.addWidget(pureref_title)
         pureref_controls_layout.addWidget(self.pureref_status)
         pureref_controls_layout.addWidget(self.pureref_open_button)
-        pureref_controls_layout.addWidget(self.pureref_sync_button)
         pureref_controls_layout.addStretch(1)
 
         pureref_workspace_layout.addWidget(pureref_library, 2)
@@ -806,7 +802,6 @@ class MainWindow(QMainWindow):
             has_project and self.pureref_asset_list.currentItem() is not None
         )
         self.pureref_open_button.setEnabled(has_project)
-        self.pureref_sync_button.setEnabled(has_project)
         take = self.current_take()
         self.open_sidecar_button.setEnabled(bool(take and (take.sidecar_path or take.media_type == "image")))
         can_play = bool(take and take.media_type in {"video", "audio"})
@@ -1516,21 +1511,7 @@ class MainWindow(QMainWindow):
             self.launch_pureref([], True)
             return
         self.db.clear_pureref_items()
-        take_ids = [take.id for take in self.db.project_takes()]
-        self.launch_pureref(take_ids, False)
-
-    def sync_new_assets_to_pureref(self) -> None:
-        if not self.db:
-            return
-        if not self.pure_ref_board_path().exists():
-            self.open_pureref_board()
-            return
-        synced = self.db.pureref_item_ids()
-        take_ids = [take.id for take in self.db.project_takes() if take.id not in synced]
-        if not take_ids:
-            self.open_pureref_board()
-            return
-        self.launch_pureref(take_ids, True)
+        self.launch_pureref([], False)
 
     def add_current_take_to_pureref(self) -> None:
         take = self.current_take()
@@ -1549,7 +1530,8 @@ class MainWindow(QMainWindow):
             return
         self.workspace_tabs.setCurrentIndex(1)
         if not self.pure_ref_board_path().exists():
-            self.open_pureref_board()
+            self.db.clear_pureref_items()
+            self.launch_pureref([take_id], False)
             return
         if take_id in self.db.pureref_item_ids():
             self.open_pureref_board()

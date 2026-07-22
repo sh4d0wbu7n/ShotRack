@@ -12,7 +12,7 @@ ShotRack is a local Windows desktop app for managing AI-generated image, video, 
 - PNG alone is imported as an image take.
 - Ratings, statuses, and comment history.
 - Per-take model and prompt tracking.
-- Project overview boards in PureRef, with incremental asset syncing.
+- Project overview boards in PureRef, with explicit per-asset transfer.
 - Move to project bin and restore.
 - Export approved takes to one flat export folder.
 
@@ -34,6 +34,9 @@ PureRef 2.x must be installed separately at
 `C:\Program Files\PureRef\PureRef.exe` to use project boards. ShotRack launches
 PureRef as an external application and stores the project board as
 `ShotRack Canvas.pur` in the project folder.
+
+ShotRack never adds project assets to PureRef automatically. Assets are sent
+only when you use `Add to PureRef` or `Add Selected`.
 
 PureRef is not included in the ShotRack portable package and must not be copied
 into a distributed ShotRack package. Every PureRef user is responsible for
