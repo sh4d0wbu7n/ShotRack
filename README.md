@@ -28,11 +28,19 @@ python -m venv .venv
 
 If `python` is not on PATH, replace `python` with the full path to your Python 3.13 executable.
 
-## Run
+## PureRef integration
 
-PureRef 2.x must be installed at `C:\Program Files\PureRef\PureRef.exe` to use
-project boards. PureRef is launched as a separate application and is not
-included in the portable ShotRack package.
+PureRef 2.x must be installed separately at
+`C:\Program Files\PureRef\PureRef.exe` to use project boards. ShotRack launches
+PureRef as an external application and stores the project board as
+`ShotRack Canvas.pur` in the project folder.
+
+PureRef is not included in the ShotRack portable package and must not be copied
+into a distributed ShotRack package. Every PureRef user is responsible for
+installing it separately and holding the license required for their use. See
+the [PureRef license agreement](https://www.pureref.com/license.php).
+
+## Run
 
 ```powershell
 .\.venv\Scripts\python.exe -m shotrack
