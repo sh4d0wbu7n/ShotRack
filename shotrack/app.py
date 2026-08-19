@@ -5,7 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QMimeData, QTimer, QUrl, Qt, QSize
+from PySide6.QtCore import QObject, QMimeData, QThread, QTimer, QUrl, Qt, QSize, Signal, Slot
 from PySide6.QtGui import QAction, QBrush, QColor, QDrag, QIcon, QKeySequence, QPainter, QPen, QPixmap
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QMenu,
+    QProgressDialog,
     QPushButton,
     QSpinBox,
     QSplitter,
@@ -170,6 +171,52 @@ class PromptDialog(QDialog):
         return self.prompt.toPlainText().strip()
 
 
+class ImportWorker(QObject):
+    finished = Signal(int)
+    failed = Signal(str)
+
+    def __init__(
+        self,
+        db_path: Path,
+        root: Path,
+        shot_id: int,
+        scene_number: int,
+        paths: list[Path],
+        model: str,
+        prompt: str,
+    ) -> None:
+        super().__init__()
+        self.db_path = db_path
+        self.root = root
+        self.shot_id = shot_id
+        self.scene_number = scene_number
+        self.paths = paths
+        self.model = model
+        self.prompt = prompt
+
+    @Slot()
+    def run(self) -> None:
+        db: Database | None = None
+        try:
+            db = Database(self.db_path)
+            shot = db.shot(self.shot_id)
+            take = import_take(
+                db,
+                self.root,
+                shot,
+                self.scene_number,
+                self.paths,
+                self.model,
+                self.prompt,
+            )
+            self.finished.emit(take.id)
+        except Exception as exc:
+            self.failed.emit(str(exc))
+        finally:
+            if db is not None:
+                db.close()
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -182,6 +229,9 @@ class MainWindow(QMainWindow):
         self.current_shot_id: int | None = None
         self.current_take_id: int | None = None
         self._building_ui = False
+        self._import_thread: QThread | None = None
+        self._import_worker: ImportWorker | None = None
+        self._import_progress: QProgressDialog | None = None
 
         self.tree = QTreeWidget()
         self.tree.setObjectName("sceneTree")
@@ -525,6 +575,18 @@ class MainWindow(QMainWindow):
         next_action.setShortcut(QKeySequence(Qt.Key_Right))
         next_action.triggered.connect(lambda: self.select_relative_take(1))
         self.addAction(next_action)
+
+        copy_file_action = QAction("Copy Media File", self)
+        copy_file_action.setShortcut(QKeySequence.Copy)
+        copy_file_action.setShortcutContext(Qt.ApplicationShortcut)
+        copy_file_action.triggered.connect(self.copy_current_media_file)
+        self.addAction(copy_file_action)
+
+        copy_path_action = QAction("Copy Media Path", self)
+        copy_path_action.setShortcut(QKeySequence("Ctrl+Shift+C"))
+        copy_path_action.setShortcutContext(Qt.ApplicationShortcut)
+        copy_path_action.triggered.connect(self.copy_current_media_path)
+        self.addAction(copy_path_action)
 
     def section_label(self, text: str) -> QLabel:
         label = QLabel(text)
@@ -1188,6 +1250,9 @@ class MainWindow(QMainWindow):
         if not self.db or not self.current_shot_id:
             QMessageBox.information(self, "No Shot Selected", "Select a shot before importing.")
             return
+        if self._import_thread is not None:
+            QMessageBox.information(self, "Import in Progress", "Wait for the current import to finish.")
+            return
         missing = [str(path) for path in paths if not path.exists()]
         if missing:
             QMessageBox.warning(self, "Missing File", "\n".join(missing))
@@ -1196,24 +1261,63 @@ class MainWindow(QMainWindow):
         if dialog.exec() != QDialog.Accepted:
             return
         model, prompt = dialog.values()
-        try:
-            shot = self.db.shot(self.current_shot_id)
-            scene = self.db.scene(shot.scene_id)
-            take = import_take(
-                self.db,
-                self.project_root_path(),
-                shot,
-                scene.number,
-                paths,
-                model,
-                prompt,
-            )
-            self.current_take_id = take.id
-            self.refresh_takes()
-            self.refresh_pureref_assets()
-            self.refresh_pureref_status()
-        except Exception as exc:
-            QMessageBox.critical(self, "Import Failed", str(exc))
+        shot = self.db.shot(self.current_shot_id)
+        scene = self.db.scene(shot.scene_id)
+
+        progress = QProgressDialog("Copying media and creating thumbnail...", "", 0, 0, self)
+        progress.setWindowTitle("Importing Media")
+        progress.setCancelButton(None)
+        progress.setWindowFlag(Qt.WindowCloseButtonHint, False)
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setAutoClose(False)
+        progress.show()
+
+        thread = QThread(self)
+        worker = ImportWorker(
+            self.db.db_path,
+            self.project_root_path(),
+            shot.id,
+            scene.number,
+            list(paths),
+            model,
+            prompt,
+        )
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(self.on_import_finished)
+        worker.failed.connect(self.on_import_failed)
+        worker.finished.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(self.on_import_thread_finished)
+        self._import_thread = thread
+        self._import_worker = worker
+        self._import_progress = progress
+        thread.start()
+
+    @Slot(int)
+    def on_import_finished(self, take_id: int) -> None:
+        self.current_take_id = take_id
+        self.refresh_takes()
+        self.refresh_pureref_assets()
+        self.refresh_pureref_status()
+        if self._import_progress is not None:
+            self._import_progress.close()
+
+    @Slot(str)
+    def on_import_failed(self, message: str) -> None:
+        if self._import_progress is not None:
+            self._import_progress.close()
+        QMessageBox.critical(self, "Import Failed", message)
+
+    @Slot()
+    def on_import_thread_finished(self) -> None:
+        if self._import_thread is not None:
+            self._import_thread.deleteLater()
+        self._import_thread = None
+        self._import_worker = None
+        self._import_progress = None
 
     def choose_import_files(self) -> None:
         if not self.db or not self.current_shot_id:
@@ -1583,6 +1687,29 @@ class MainWindow(QMainWindow):
     def set_status(self, value: str) -> None:
         if self.current_take_id:
             self.status.setCurrentText(value)
+
+    def selected_media_path(self) -> Path | None:
+        take = self.current_take()
+        if not take:
+            return None
+        media = project_path(self.project_root_path(), take.media_path)
+        if media and media.exists() and media.is_file():
+            return media.resolve()
+        return None
+
+    def copy_current_media_file(self) -> None:
+        media = self.selected_media_path()
+        if media is None:
+            return
+        mime_data = QMimeData()
+        mime_data.setUrls([QUrl.fromLocalFile(str(media))])
+        QApplication.clipboard().setMimeData(mime_data)
+
+    def copy_current_media_path(self) -> None:
+        media = self.selected_media_path()
+        if media is None:
+            return
+        QApplication.clipboard().setText(f'"{media}"')
 
     def select_relative_take(self, offset: int) -> None:
         row = self.take_list.currentRow()
