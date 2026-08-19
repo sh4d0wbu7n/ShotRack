@@ -1,4 +1,4 @@
-# ShotRack 0.0.6
+# ShotRack 0.0.7
 
 ShotRack is a local Windows desktop app for managing AI-generated image, video, and audio takes.
 
@@ -8,6 +8,9 @@ ShotRack is a local Windows desktop app for managing AI-generated image, video, 
 - Scene / shot / take structure.
 - Drag-and-drop import into the selected shot.
 - Imported files are copied into the project folder.
+- Media imports run in the background so large videos do not freeze the app.
+- `Ctrl+C` copies the selected take's media file for pasting into Windows Explorer.
+- `Ctrl+Shift+C` copies the selected take's quoted absolute media path.
 - Video + PNG dragged together means the PNG is stored as a workflow sidecar.
 - PNG alone is imported as an image take.
 - Ratings, statuses, and comment history.
@@ -58,7 +61,7 @@ the [PureRef license agreement](https://www.pureref.com/license.php).
 The portable app is written to:
 
 ```text
-dist/ShotRack-0.0.6/
+dist/ShotRack-0.0.7/
 ```
 
 ## Project format
