@@ -29,17 +29,17 @@ def ensure_project_dirs(root: Path) -> None:
         (root / name).mkdir(parents=True, exist_ok=True)
 
 
-def shot_folder(root: Path, scene_number: int, shot_number: int) -> Path:
-    return root / "media" / scene_code(scene_number) / shot_code(shot_number)
+def shot_folder(root: Path, scene_number: int, shot_number: int, scene_digits: int = 3) -> Path:
+    return root / "media" / scene_code(scene_number, scene_digits) / shot_code(shot_number)
 
 
-def thumb_folder(root: Path, scene_number: int, shot_number: int) -> Path:
-    return root / "thumbnails" / scene_code(scene_number) / shot_code(shot_number)
+def thumb_folder(root: Path, scene_number: int, shot_number: int, scene_digits: int = 3) -> Path:
+    return root / "thumbnails" / scene_code(scene_number, scene_digits) / shot_code(shot_number)
 
 
-def base_take_name(scene_number: int, shot_number: int, description: str, take_number: int) -> str:
+def base_take_name(scene_number: int, shot_number: int, description: str, take_number: int, scene_digits: int = 3) -> str:
     return (
-        f"{scene_code(scene_number)}_"
+        f"{scene_code(scene_number, scene_digits)}_"
         f"{shot_code(shot_number)}_"
         f"{snake_case(description)}_"
         f"{take_code(take_number)}"
@@ -68,8 +68,8 @@ def import_take(
         raise ValueError("Drag one media file, or one video plus one PNG workflow sidecar.")
 
     take_number = db.next_take_number(shot.id)
-    base = base_take_name(scene_number, shot.number, shot.description, take_number)
-    destination_dir = shot_folder(root, scene_number, shot.number)
+    base = base_take_name(scene_number, shot.number, shot.description, take_number, db.scene_digits)
+    destination_dir = shot_folder(root, scene_number, shot.number, db.scene_digits)
     destination_dir.mkdir(parents=True, exist_ok=True)
     target = ensure_unique_path(destination_dir / f"{base}{media_source.suffix.lower()}")
     shutil.copy2(media_source, target)
@@ -79,7 +79,7 @@ def import_take(
         sidecar_target = ensure_unique_path(destination_dir / f"{base}_workflow.png")
         shutil.copy2(sidecar_source, sidecar_target)
 
-    thumb_dir = thumb_folder(root, scene_number, shot.number)
+    thumb_dir = thumb_folder(root, scene_number, shot.number, db.scene_digits)
     thumb_dir.mkdir(parents=True, exist_ok=True)
     thumb_target = thumb_dir / f"{base}.jpg"
     create_thumbnail(target, thumb_target)
@@ -145,8 +145,8 @@ def draw_placeholder(thumb_path: Path, label: str, suffix: str) -> None:
 
 
 def rebuild_take_paths(db: Database, root: Path, shot: Shot, scene_number: int) -> None:
-    media_dir = shot_folder(root, scene_number, shot.number)
-    thumbs_dir = thumb_folder(root, scene_number, shot.number)
+    media_dir = shot_folder(root, scene_number, shot.number, db.scene_digits)
+    thumbs_dir = thumb_folder(root, scene_number, shot.number, db.scene_digits)
     media_dir.mkdir(parents=True, exist_ok=True)
     thumbs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -154,7 +154,7 @@ def rebuild_take_paths(db: Database, root: Path, shot: Shot, scene_number: int) 
         media = project_path(root, take.media_path)
         sidecar = project_path(root, take.sidecar_path)
         thumb = project_path(root, take.thumbnail_path)
-        base = base_take_name(scene_number, shot.number, shot.description, take.take_number)
+        base = base_take_name(scene_number, shot.number, shot.description, take.take_number, db.scene_digits)
 
         new_media = media_dir / f"{base}{media.suffix.lower()}" if media else None
         new_sidecar = media_dir / f"{base}_workflow.png" if sidecar else None
@@ -186,8 +186,8 @@ def delete_take_files_and_record(db: Database, root: Path, take: Take) -> None:
 def delete_shot_files_and_record(db: Database, root: Path, shot: Shot, scene_number: int) -> None:
     for take in db.takes_for_shot(shot.id, include_binned=True):
         delete_take_files(root, take)
-    shutil.rmtree(shot_folder(root, scene_number, shot.number), ignore_errors=True)
-    shutil.rmtree(thumb_folder(root, scene_number, shot.number), ignore_errors=True)
+    shutil.rmtree(shot_folder(root, scene_number, shot.number, db.scene_digits), ignore_errors=True)
+    shutil.rmtree(thumb_folder(root, scene_number, shot.number, db.scene_digits), ignore_errors=True)
     db.delete_shot(shot.id)
 
 
@@ -195,8 +195,8 @@ def delete_scene_files_and_record(db: Database, root: Path, scene_id: int) -> No
     scene = db.scene(scene_id)
     for take in db.takes_for_scene(scene_id, include_binned=True):
         delete_take_files(root, take)
-    shutil.rmtree(root / "media" / scene_code(scene.number), ignore_errors=True)
-    shutil.rmtree(root / "thumbnails" / scene_code(scene.number), ignore_errors=True)
+    shutil.rmtree(root / "media" / scene_code(scene.number, db.scene_digits), ignore_errors=True)
+    shutil.rmtree(root / "thumbnails" / scene_code(scene.number, db.scene_digits), ignore_errors=True)
     db.delete_scene(scene_id)
 
 
@@ -218,12 +218,12 @@ def move_take_to_bin(db: Database, root: Path, take: Take) -> None:
 def restore_take_from_bin(db: Database, root: Path, take: Take) -> None:
     shot = db.shot(take.shot_id)
     scene = db.scene(shot.scene_id)
-    base = base_take_name(scene.number, shot.number, shot.description, take.take_number)
+    base = base_take_name(scene.number, shot.number, shot.description, take.take_number, db.scene_digits)
     media = project_path(root, take.media_path)
     sidecar = project_path(root, take.sidecar_path)
     thumb = project_path(root, take.thumbnail_path)
-    media_dir = shot_folder(root, scene.number, shot.number)
-    thumb_dir = thumb_folder(root, scene.number, shot.number)
+    media_dir = shot_folder(root, scene.number, shot.number, db.scene_digits)
+    thumb_dir = thumb_folder(root, scene.number, shot.number, db.scene_digits)
     media_dir.mkdir(parents=True, exist_ok=True)
     thumb_dir.mkdir(parents=True, exist_ok=True)
 
@@ -256,7 +256,7 @@ def move_take_between_roots(db: Database, root: Path, take: Take, target_root_na
     thumb = project_path(root, take.thumbnail_path)
     shot = db.shot(take.shot_id)
     scene = db.scene(shot.scene_id)
-    target_dir = root / target_root_name / scene_code(scene.number) / shot_code(shot.number)
+    target_dir = root / target_root_name / scene_code(scene.number, db.scene_digits) / shot_code(shot.number)
     target_dir.mkdir(parents=True, exist_ok=True)
 
     def move_one(path: Path | None) -> Path | None:

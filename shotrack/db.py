@@ -69,10 +69,19 @@ class CanvasPlacement:
 class Database:
     def __init__(self, db_path: Path) -> None:
         self.db_path = db_path
+        is_new = not db_path.exists()
         self.conn = sqlite3.connect(db_path)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
         self.migrate()
+        self.conn.execute(
+            "INSERT OR IGNORE INTO project_settings(key, value) VALUES ('scene_digits', ?)",
+            ("4" if is_new else "3",),
+        )
+        self.conn.commit()
+        self.scene_digits = int(self.conn.execute(
+            "SELECT value FROM project_settings WHERE key = 'scene_digits'"
+        ).fetchone()[0])
 
     def close(self) -> None:
         self.conn.close()
@@ -80,6 +89,11 @@ class Database:
     def migrate(self) -> None:
         self.conn.executescript(
             """
+            CREATE TABLE IF NOT EXISTS project_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS scenes (
                 id INTEGER PRIMARY KEY,
                 number INTEGER NOT NULL UNIQUE,
@@ -174,6 +188,8 @@ class Database:
             "SELECT COALESCE(MAX(number), 0) FROM shots WHERE scene_id = ?", (scene_id,)
         ).fetchone()[0]
         number = max_number + 10
+        if number > 9999:
+            raise ValueError("Automatic shot numbering exceeds S9999. Renumber the highest shot first.")
         cur = self.conn.execute(
             "INSERT INTO shots(scene_id, number, description) VALUES (?, ?, ?)",
             (scene_id, number, "untitled"),
@@ -198,6 +214,22 @@ class Database:
             (number, description, shot_id),
         )
         self.conn.commit()
+
+    def update_scene_and_shot(
+        self, scene_id: int, number: int, description: str,
+        shot_id: int | None, shot_number: int, shot_description: str,
+    ) -> None:
+        # A duplicate shot number must not partially commit a scene rename.
+        with self.conn:
+            self.conn.execute(
+                "UPDATE scenes SET number = ?, description = ? WHERE id = ?",
+                (number, description, scene_id),
+            )
+            if shot_id is not None:
+                self.conn.execute(
+                    "UPDATE shots SET number = ?, description = ? WHERE id = ? AND scene_id = ?",
+                    (shot_number, shot_description, shot_id, scene_id),
+                )
 
     def next_take_number(self, shot_id: int) -> int:
         return (

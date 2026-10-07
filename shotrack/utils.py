@@ -15,8 +15,15 @@ def snake_case(value: str) -> str:
     return cleaned or "untitled"
 
 
-def scene_code(number: int) -> str:
-    return f"SC{number:03d}"
+def scene_code(number: int, digits: int = 3) -> str:
+    return f"SC{number:0{digits}d}"
+
+
+def quoted_path(path: Path) -> str:
+    value = str(path)
+    if any(char.isspace() or char in '&|<>^()%!;`$\"\'' for char in value):
+        return f'"{value}"'
+    return value
 
 
 def shot_code(number: int) -> str:

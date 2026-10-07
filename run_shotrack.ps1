@@ -7,3 +7,4 @@ if (-not (Test-Path ".\.venv\Scripts\python.exe")) {
 }
 
 .\.venv\Scripts\python.exe -m shotrack
+exit $LASTEXITCODE
