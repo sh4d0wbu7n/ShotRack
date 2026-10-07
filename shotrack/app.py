@@ -40,6 +40,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .clipboard import copy_files
 from .db import Database, STATUSES, Take
 from .media import (
     delete_scene_files_and_record,
@@ -54,7 +55,7 @@ from .media import (
 )
 from . import __version__
 from .settings import load_last_project, save_last_project
-from .utils import project_path, scene_code, shot_code, snake_case
+from .utils import project_path, quoted_path, scene_code, shot_code, snake_case
 
 
 PURE_REF_EXECUTABLE = Path(r"C:\Program Files\PureRef\PureRef.exe")
@@ -330,12 +331,12 @@ class MainWindow(QMainWindow):
         self.delete_take_button.clicked.connect(self.delete_current_take)
 
         self.scene_number = QSpinBox()
-        self.scene_number.setRange(1, 999)
+        self.scene_number.setRange(1, 9999)
         self.scene_description = QLineEdit()
         self.scene_description.setPlaceholderText("scene_description")
         self.shot_number = QSpinBox()
-        self.shot_number.setRange(10, 9990)
-        self.shot_number.setSingleStep(10)
+        self.shot_number.setRange(1, 9999)
+        self.shot_number.setSingleStep(1)
         self.shot_description = QLineEdit()
         self.shot_description.setPlaceholderText("human_description")
         self.save_shot_button = QPushButton("Save Scene/Shot")
@@ -909,12 +910,20 @@ class MainWindow(QMainWindow):
             self.load_project(Path(folder))
 
     def load_project(self, root: Path) -> None:
+        if self._import_thread is not None:
+            QMessageBox.information(self, "Import in Progress", "Wait for the current import to finish.")
+            return
         ensure_project_dirs(root)
+        new_db = Database(root / "project.db")
+        self.stop_playback()
         if self.db:
             self.db.close()
         self.project_root = root
-        self.db = Database(root / "project.db")
-        save_last_project(root)
+        self.db = new_db
+        try:
+            save_last_project(root)
+        except OSError as exc:
+            self.statusBar().showMessage(f"Project opened; could not remember it: {exc}", 15000)
         self.current_scene_id = None
         self.current_shot_id = None
         self.current_take_id = None
@@ -930,24 +939,30 @@ class MainWindow(QMainWindow):
         self.update_enabled_state()
 
     def refresh_tree(self) -> None:
-        self.tree.clear()
-        if not self.db:
-            return
-        for scene in self.db.scenes():
-            scene_label = scene_code(scene.number)
-            if scene.description:
-                scene_label = f"{scene_label}  {scene.description}"
-            scene_item = QTreeWidgetItem([scene_label])
-            scene_item.setData(0, Qt.UserRole, ("scene", scene.id))
-            self.tree.addTopLevelItem(scene_item)
-            for shot in self.db.shots_for_scene(scene.id):
-                label = f"{shot_code(shot.number)}  {shot.description}"
-                shot_item = QTreeWidgetItem([label])
-                shot_item.setData(0, Qt.UserRole, ("shot", shot.id))
-                scene_item.addChild(shot_item)
-                if shot.id == self.current_shot_id:
-                    self.tree.setCurrentItem(shot_item)
-            scene_item.setExpanded(True)
+        blocked = self.tree.blockSignals(True)
+        try:
+            self.tree.clear()
+            if not self.db:
+                return
+            for scene in self.db.scenes():
+                scene_label = scene_code(scene.number, self.db.scene_digits)
+                if scene.description:
+                    scene_label = f"{scene_label}  {scene.description}"
+                scene_item = QTreeWidgetItem([scene_label])
+                scene_item.setData(0, Qt.UserRole, ("scene", scene.id))
+                self.tree.addTopLevelItem(scene_item)
+                for shot in self.db.shots_for_scene(scene.id):
+                    label = f"{shot_code(shot.number)}  {shot.description}"
+                    shot_item = QTreeWidgetItem([label])
+                    shot_item.setData(0, Qt.UserRole, ("shot", shot.id))
+                    scene_item.addChild(shot_item)
+                    if shot.id == self.current_shot_id:
+                        self.tree.setCurrentItem(shot_item)
+                if self.current_shot_id is None and scene.id == self.current_scene_id:
+                    self.tree.setCurrentItem(scene_item)
+                scene_item.setExpanded(True)
+        finally:
+            self.tree.blockSignals(blocked)
 
     def refresh_takes(self) -> None:
         selected_take_id = self.current_take_id
@@ -1014,7 +1029,7 @@ class MainWindow(QMainWindow):
             shot = self.db.shot(take.shot_id)
             scene = self.db.scene(shot.scene_id)
             item = QListWidgetItem(
-                f"SC_{scene.number:03d} / SH_{shot.number:04d}\n"
+                f"{scene_code(scene.number, self.db.scene_digits)} / {shot_code(shot.number)}\n"
                 f"TK_{take.take_number:03d}  {asset_type_label(take)}"
             )
             item.setData(Qt.UserRole, take.id)
@@ -1222,7 +1237,11 @@ class MainWindow(QMainWindow):
             scene = self.db.create_scene()
             scene_id = scene.id
             self.current_scene_id = scene_id
-        shot = self.db.create_shot(scene_id)
+        try:
+            shot = self.db.create_shot(scene_id)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Add Shot Failed", str(exc))
+            return
         self.current_shot_id = shot.id
         self.current_take_id = None
         self.refresh_tree()
@@ -1235,11 +1254,11 @@ class MainWindow(QMainWindow):
         new_scene_number = self.scene_number.value()
         scene_description = self.scene_description.text().strip()
         try:
-            self.db.update_scene(self.current_scene_id, new_scene_number, scene_description)
-            if self.current_shot_id:
-                new_shot_number = self.shot_number.value()
-                description = snake_case(self.shot_description.text())
-                self.db.update_shot(self.current_shot_id, new_shot_number, description)
+            self.db.update_scene_and_shot(
+                self.current_scene_id, new_scene_number, scene_description,
+                self.current_shot_id, self.shot_number.value(),
+                snake_case(self.shot_description.text()),
+            )
             for shot in self.db.shots_for_scene(self.current_scene_id):
                 rebuild_take_paths(self.db, self.project_root_path(), shot, new_scene_number)
         except Exception as exc:
@@ -1421,7 +1440,7 @@ class MainWindow(QMainWindow):
         if not self.db or not self.current_scene_id:
             return
         scene = self.db.scene(self.current_scene_id)
-        folder = self.project_root_path() / "media" / scene_code(scene.number)
+        folder = self.project_root_path() / "media" / scene_code(scene.number, self.db.scene_digits)
         folder.mkdir(parents=True, exist_ok=True)
         self.open_folder(folder)
 
@@ -1483,7 +1502,7 @@ class MainWindow(QMainWindow):
         reply = QMessageBox.question(
             self,
             "Delete Shot",
-            f"Permanently delete {scene_code(scene.number)} {shot_code(shot.number)} and all of its assets?",
+            f"Permanently delete {scene_code(scene.number, self.db.scene_digits)} {shot_code(shot.number)} and all of its assets?",
         )
         if reply != QMessageBox.Yes:
             return
@@ -1502,7 +1521,7 @@ class MainWindow(QMainWindow):
         reply = QMessageBox.question(
             self,
             "Delete Scene",
-            f"Permanently delete {scene_code(scene.number)} and all shots/assets in it?",
+            f"Permanently delete {scene_code(scene.number, self.db.scene_digits)} and all shots/assets in it?",
         )
         if reply != QMessageBox.Yes:
             return
@@ -1680,6 +1699,17 @@ class MainWindow(QMainWindow):
             raise RuntimeError("No project is open.")
         return self.project_root
 
+    def closeEvent(self, event) -> None:  # type: ignore[no-untyped-def]
+        if self._import_thread is not None and self._import_thread.isRunning():
+            QMessageBox.information(self, "Import in Progress", "Wait for the current import to finish.")
+            event.ignore()
+            return
+        self.stop_playback()
+        if self.db:
+            self.db.close()
+            self.db = None
+        super().closeEvent(event)
+
     def set_stars(self, value: int) -> None:
         if self.current_take_id:
             self.stars.setValue(value)
@@ -1698,18 +1728,23 @@ class MainWindow(QMainWindow):
         return None
 
     def copy_current_media_file(self) -> None:
+        focus = QApplication.focusWidget()
+        if isinstance(focus, (QLineEdit, QTextEdit)):
+            focus.copy()
+            return
         media = self.selected_media_path()
         if media is None:
             return
-        mime_data = QMimeData()
-        mime_data.setUrls([QUrl.fromLocalFile(str(media))])
-        QApplication.clipboard().setMimeData(mime_data)
+        try:
+            copy_files([media], int(self.winId()))
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, "Copy Failed", str(exc))
 
     def copy_current_media_path(self) -> None:
         media = self.selected_media_path()
         if media is None:
             return
-        QApplication.clipboard().setText(f'"{media}"')
+        QApplication.clipboard().setText(quoted_path(media))
 
     def select_relative_take(self, offset: int) -> None:
         row = self.take_list.currentRow()
